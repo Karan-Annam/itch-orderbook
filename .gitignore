@@ -19,6 +19,11 @@ venv/
 __pycache__/
 *.pyc
 
+# gui session artifacts
+gui/runs/
+gui/data_cache/
+.streamlit/
+
 # waveforms / logs
 *.vcd
 *.log
