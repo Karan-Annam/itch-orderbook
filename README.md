@@ -133,5 +133,5 @@ internal format (real ITCH uses 6, see `data/README.md`).
 
 ## Tooling
 
-Build toolchain, AI-assisted coding, and the two real bugs it surfaced are
-covered in [TOOLING.md](TOOLING.md).
+Build toolchain, AI-assisted coding, the two real bugs it surfaced, and how
+the docs themselves were written are covered in [TOOLING.md](TOOLING.md).
