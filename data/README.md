@@ -7,8 +7,8 @@ supported.
 
 Real ITCH sample files are large and must be downloaded out of band, so the
 project ships a deterministic **synthetic ITCH 5.0 generator** that emits a
-byte-exact stream — correct 2-byte big-endian length prefixes, big-endian
-fields, and the exact body layouts in `sw/parser/itch_messages.hpp` — covering
+byte-exact stream: correct 2-byte big-endian length prefixes, big-endian
+fields, and the exact body layouts in `sw/parser/itch_messages.hpp`, covering
 every message type the book handles (`A F E C X D U P S`).
 
 The generator maintains its own set of live orders, so every Execute / Cancel /
