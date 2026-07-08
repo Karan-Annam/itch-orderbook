@@ -133,6 +133,5 @@ internal format (real ITCH uses 6, see `data/README.md`).
 
 ## AI Use and Tooling
 
-Built with AI assistance (Claude Code) from a spec I wrote, with me doing
-the hardware debugging directly. More on that split, and the toolchain, in
-[TOOLING.md](TOOLING.md).
+These docs were drafted with AI assistance and edited by me. Code-level AI
+use and the build toolchain are in [TOOLING.md](TOOLING.md).
