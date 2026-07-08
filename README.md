@@ -15,7 +15,7 @@ just quoting it.
 - [GUI](#gui)
 - [Layout](#layout)
 - [Limitations](#limitations)
-- [Tooling](#tooling)
+- [AI Use and Tooling](#ai-use-and-tooling)
 
 ## Quick start
 
@@ -131,7 +131,9 @@ Single-symbol RTL (software is multi-symbol); async-read behavioral SRAMs
 cycle count at a modeled 250 MHz, not post-P&R timing; 8-byte timestamps per the
 internal format (real ITCH uses 6, see `data/README.md`).
 
-## Tooling
+## AI Use and Tooling
 
-Build toolchain, AI-assisted coding, the two real bugs it surfaced, and how
-the docs themselves were written are covered in [TOOLING.md](TOOLING.md).
+Up front: I used AI (Claude Code) throughout this project, for the code and
+for these docs, this section included. I wrote the spec, drove the build,
+and did the debugging myself. The build toolchain and the two real bugs that
+came out of the process are in [TOOLING.md](TOOLING.md).

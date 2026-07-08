@@ -1,7 +1,5 @@
 # Tooling
 
-What actually went into building, verifying, and writing this up.
-
 ## Build and verification
 
 - g++ / C++17 for the software side, with `-march=native` picking AVX-512,
@@ -16,33 +14,25 @@ Host-specific gotchas (MSYS2 PATH ordering, the broken Perl `verilator`
 wrapper, matplotlib not being on the ucrt64 Python) are in
 [docs/BUILDING.md](docs/BUILDING.md).
 
-## AI-assisted coding
+## How this got built
 
-I used Claude Code as a coding tool throughout this project, the way a lot of
-people now pair-program with an LLM. I wrote the spec, ran the build, and
-worked through the hardware bugs myself once the RTL was diffing against the
-reference model on real traffic.
+This project, and the docs describing it (README, DESIGN.md, this file),
+were built with AI assistance and then reviewed and edited by me, not typed
+out from nothing by hand. I wrote the spec, ran the build, and did the actual
+debugging myself, especially on the hardware side, once the RTL was diffing
+against the reference model on real traffic instead of toy cases.
 
-Two real bugs came out of that process. The order-ref hash table originally
-deleted entries by clearing the slot, which is wrong for linear probing since
-it orphans any colliding key stored after it. A 24-deep forced-collision test
-caught it, and I fixed it with tombstone deletion. The other was a one-cycle
-handshake race in the best-price tracker: the engine checked `!scanning` to
-know a rescan had finished, but the tracker only raises `scanning` one cycle
-after sampling the trigger, so the engine could commit a stale, zero-share
-best price in that window. Fixed by tracking whether a scan is expected and
-waiting for it to actually start and finish. Full write-ups are in
-[docs/DESIGN.md](docs/DESIGN.md), they're honestly the most interesting part
-of the project.
+Two real bugs are proof of that, not just a sentence claiming it happened.
+The order-ref hash table originally deleted entries by clearing the slot,
+which breaks linear probing since it orphans any colliding key stored after
+it. A 24-deep forced-collision test caught it; tombstone deletion fixed it.
+Separately, the best-price tracker had a one-cycle handshake race: the engine
+checked `!scanning` to know a rescan had finished, but the tracker only
+raises `scanning` one cycle after sampling the trigger, so the engine could
+commit a stale, zero-share best price in that window. Fixed by tracking
+whether a scan is expected and waiting for it to actually start and finish.
+Both are written up properly in [docs/DESIGN.md](docs/DESIGN.md), and
+they're honestly the most interesting part of the project to read.
 
-Happy to walk through either of those, or anything else in the pipeline, in
-more depth.
-
-## Documentation
-
-Worth saying plainly rather than leaving it implied: the docs in this repo
-(README, DESIGN.md, this file) were drafted with the same AI assistance and
-then edited by me for accuracy, not written from scratch by hand. Across four
-projects that all got this treatment, the writing ends up reading pretty
-consistent in structure and tone, and I'd rather say that directly than have
-it look like I'm pretending otherwise.
+If any of that raises questions, ask, I can go as deep as you want on either
+one.
