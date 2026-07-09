@@ -152,32 +152,41 @@ int main(int argc, char** argv) {
     RtlDriver drv;
     drv.reset(/*raw_mode=*/true);
 
-    std::array<Hist, TYPE_COUNT> hist_type;   // TRUE pipeline latency (ingest-excluded)
+    std::array<Hist, TYPE_COUNT> hist_type;   // pipeline latency (ingest-excluded)
     Hist hist_all;
     Hist hist_service;                        // commit-to-commit = service time (throughput)
+    std::array<Hist, TYPE_COUNT> hist_e2e_type;  // first-byte-to-commit (end-to-end)
+    Hist hist_e2e_all;
 
     uint64_t prev_commit_cyc = drv.cycles();
 
-    // on_msg(idx, ingest_done_cyc, commit_cyc):
-    //   pipeline latency = commit - ingest_done   (decode + book update + best)
-    //   service time     = commit - prev commit   (1/throughput, ingest-bound)
-    auto on_msg = [&](uint64_t idx, uint64_t ingest_cyc, uint64_t commit_cyc) {
+    // on_msg(idx, ingest_first_cyc, ingest_done_cyc, commit_cyc):
+    //   pipeline latency = commit - ingest_done   (decode + book update + best;
+    //                      with overlapped ingest this includes any wait for
+    //                      the engine to finish the previous message)
+    //   end-to-end       = commit - ingest_first  (first input byte to commit)
+    //   service time     = commit - prev commit   (1/throughput)
+    auto on_msg = [&](uint64_t idx, uint64_t first_cyc, uint64_t ingest_cyc,
+                      uint64_t commit_cyc) {
         const double lat_ns = ingest_cyc
             ? static_cast<double>(commit_cyc - ingest_cyc) * ns_per_cycle : 0.0;
+        const double e2e_ns = first_cyc
+            ? static_cast<double>(commit_cyc - first_cyc) * ns_per_cycle : 0.0;
         const double svc_ns =
             static_cast<double>(commit_cyc - prev_commit_cyc) * ns_per_cycle;
         prev_commit_cyc = commit_cyc;
 
         const uint8_t tbyte = msgs[idx].body.empty() ? 0 : msgs[idx].body[0];
         const int tidx = type_byte_to_idx(tbyte);
-        if (tidx >= 0) hist_type[tidx].record(lat_ns);
+        if (tidx >= 0) { hist_type[tidx].record(lat_ns); hist_e2e_type[tidx].record(e2e_ns); }
         hist_all.record(lat_ns);
+        hist_e2e_all.record(e2e_ns);
         hist_service.record(svc_ns);
 
         if (!quiet && idx > 0 && (idx % 5000 == 0))
-            std::printf("  [%8llu] total_cyc=%llu  latency_ns=%.1f  service_ns=%.1f\n",
+            std::printf("  [%8llu] total_cyc=%llu  latency_ns=%.1f  e2e_ns=%.1f  service_ns=%.1f\n",
                         (unsigned long long)idx,
-                        (unsigned long long)drv.cycles(), lat_ns, svc_ns);
+                        (unsigned long long)drv.cycles(), lat_ns, e2e_ns, svc_ns);
     };
 
     const uint64_t committed = drv.drive_latency(stream, frame_len, on_msg);
@@ -195,15 +204,23 @@ int main(int argc, char** argv) {
 
     // ---- print histograms ---------------------------------------------------
     std::printf("\n==== RTL pipeline latency — ingest excluded (ns at %.0f MHz) ====\n", mhz);
-    std::printf("     (cycles from a message's last input byte to its commit)\n");
+    std::printf("     (cycles from a message's last input byte to its commit;\n"
+                "      ingest overlaps the previous message, so this includes\n"
+                "      any wait for the engine to free up)\n");
     for (int i = 0; i < TYPE_COUNT; ++i)
         hist_type[i].print(TYPE_NAMES[i]);
     hist_all.print("ALL");
+    std::printf("\n==== RTL end-to-end latency — first input byte to commit ====\n");
+    for (int i = 0; i < TYPE_COUNT; ++i)
+        hist_e2e_type[i].print(TYPE_NAMES[i]);
+    hist_e2e_all.print("ALL");
     std::printf("\n==== RTL service time — commit-to-commit = 1/throughput ====\n");
     hist_service.print("SERVICE");
 
     // ---- print RTL perf counters -------------------------------------------
     std::printf("\n==== RTL perf counters ====\n");
+    std::printf("  ingest_stall_cyc=%llu\n",
+                (unsigned long long)top->ingest_stall_cycles);
     std::printf("  add_cyc=%llu  del_cyc=%llu  repl_cyc=%llu\n"
                 "  scans=%llu  scan_cyc_total=%llu\n"
                 "  probe1=%llu  probe2=%llu  probe_gt2=%llu\n"
@@ -239,6 +256,15 @@ int main(int argc, char** argv) {
             std::string p = csv_dir + "/latency_hw_all.csv";
             hist_all.write_csv(p.c_str(), "ALL");
         }
+        for (int i = 0; i < TYPE_COUNT; ++i) {
+            if (!hist_e2e_type[i].count) continue;
+            std::string p = csv_dir + "/latency_hw_e2e_" + TYPE_NAMES[i] + ".csv";
+            hist_e2e_type[i].write_csv(p.c_str(), TYPE_NAMES[i]);
+        }
+        {
+            std::string p = csv_dir + "/latency_hw_e2e_all.csv";
+            hist_e2e_all.write_csv(p.c_str(), "ALL");
+        }
 
         std::string pc = csv_dir + "/perf_counters_hw.csv";
         if (FILE* f = std::fopen(pc.c_str(), "w")) {
@@ -252,6 +278,8 @@ int main(int argc, char** argv) {
             std::fprintf(f, "p50_all_ns,%.0f\n",        hist_all.percentile(0.50));
             std::fprintf(f, "p99_all_ns,%.0f\n",        hist_all.percentile(0.99));
             std::fprintf(f, "p9999_all_ns,%.0f\n",      hist_all.percentile(0.9999));
+            std::fprintf(f, "e2e_p50_ns,%.0f\n",        hist_e2e_all.percentile(0.50));
+            std::fprintf(f, "e2e_p99_ns,%.0f\n",        hist_e2e_all.percentile(0.99));
             std::fprintf(f, "service_p50_ns,%.0f\n",    svc_p50);
             std::fprintf(f, "throughput_msg_s,%.0f\n",  thru_msg_s);
             std::fprintf(f, "add_cycles,%llu\n",         (unsigned long long)top->add_cycles);
@@ -262,6 +290,7 @@ int main(int argc, char** argv) {
             std::fprintf(f, "hash_probe_1,%llu\n",       (unsigned long long)top->hash_probe_1);
             std::fprintf(f, "hash_probe_2,%llu\n",       (unsigned long long)top->hash_probe_2);
             std::fprintf(f, "hash_probe_gt2,%llu\n",     (unsigned long long)top->hash_probe_gt2);
+            std::fprintf(f, "ingest_stall_cycles,%llu\n",(unsigned long long)top->ingest_stall_cycles);
             std::fprintf(f, "msg_total,%llu\n",          (unsigned long long)top->msg_total);
             std::fprintf(f, "trade_count,%llu\n",        (unsigned long long)top->trade_count);
             std::fclose(f);

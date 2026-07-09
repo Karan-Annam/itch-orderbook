@@ -49,15 +49,28 @@ inline std::vector<DecTap> run_capture_decode(RtlDriver& drv,
     auto* top = drv.top();
     std::vector<DecTap> taps;
     size_t i = 0;
+    // dec_tap_valid can stay high for many cycles (the decoder holds a message
+    // until the engine accepts it), so capture on the rising edge only. The
+    // framer gates msg_complete on !dec_valid, guaranteeing a >=1-cycle gap
+    // between consecutive messages — every message produces its own edge.
+    bool prev_v = false;
     while (taps.size() < nmsgs && drv.cycles() < cycle_cap) {
-        if (top->in_ready && i < stream.size()) { top->in_byte = stream[i++]; top->in_valid = 1; }
-        else                                     { top->in_valid = 0; }
+        if (top->in_ready && i < stream.size()) {
+            size_t n = std::min(WORD_BYTES, stream.size() - i);
+            set_in_word(top, &stream[i], n);
+            top->in_valid = 1;
+            i += n;
+        } else {
+            top->in_valid = 0;
+        }
         drv.tick();
-        if (top->dec_tap_valid) {
+        bool v = top->dec_tap_valid;
+        if (v && !prev_v) {
             taps.push_back(DecTap{top->dec_tap_type, (bool)top->dec_tap_is_bid,
                                   (bool)top->dec_tap_printable, top->dec_tap_price,
                                   top->dec_tap_shares, top->dec_tap_ref, top->dec_tap_new_ref});
         }
+        prev_v = v;
     }
     return taps;
 }

@@ -1,17 +1,19 @@
-// Field decoder. Framer bytes land in body[offset]; on msg_complete the fields
+// Field decoder. Framer beats land in body[] 16 bytes at a time (beat widx
+// carries body bytes 16*widx..16*widx+nbytes-1); on msg_complete the fields
 // come out by plain bit-wiring — a big-endian field at body[k..k+n-1] is just
 // {body[k],...,body[k+n-1]}, so the byte-swap costs nothing. Each message type
-// is normalized into decoded_t and held (dec_valid) until engine_done.
+// is normalized into decoded_t and held (dec_valid) until dec_accept.
 module itch_decoder
   import ob_pkg::*;
 (
-  input  logic        clk,
-  input  logic        rst,
+  input  logic                clk,
+  input  logic                rst,
 
-  input  logic [7:0]  msg_byte,
-  input  logic        msg_byte_valid,
-  input  logic [5:0]  msg_offset,
-  input  logic        msg_complete,
+  input  logic [WORD_W-1:0]   msg_data,
+  input  logic [NBYTES_W-1:0] msg_nbytes,
+  input  logic                msg_beat_valid,
+  input  logic [WIDX_W-1:0]   msg_widx,
+  input  logic                msg_complete,
 
   input  logic        dec_accept,     // engine latched the current message
 
@@ -94,7 +96,12 @@ module itch_decoder
       dec_valid <= 1'b0;
       dec       <= '0;
     end else begin
-      if (msg_byte_valid) body[msg_offset] <= msg_byte;
+      if (msg_beat_valid) begin
+        for (int i = 0; i < WORD_BYTES; i++) begin
+          if (i < int'(msg_nbytes) && (int'(msg_widx) * WORD_BYTES + i) < MSG_MAX_BYTES)
+            body[int'(msg_widx) * WORD_BYTES + i] <= msg_data[8*i +: 8];
+        end
+      end
       if (msg_complete) begin
         dec       <= d_c;
         dec_valid <= 1'b1;

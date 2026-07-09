@@ -36,6 +36,15 @@ package ob_pkg;
 
   localparam int MSG_MAX_BYTES = 48;     // Trade('P') body = 46; pad to 48
 
+  // ---- wide ingest path -----------------------------------------------------
+  localparam int WORD_BYTES = 16;                    // ingest bus bytes per beat
+  localparam int WORD_W     = WORD_BYTES * BYTE_W;   // 128
+  localparam int NBYTES_W   = 5;                     // holds 1..16
+  localparam int MSG_MAX_WORDS = (MSG_MAX_BYTES + WORD_BYTES - 1) / WORD_BYTES;
+  localparam int WIDX_W     = 2;                     // body word index 0..2
+  // The minimum frame (2-byte prefix + 14-byte System body) equals WORD_BYTES,
+  // so at most one message can end within any single ingest word.
+
   // ---- ITCH message type codes (ASCII) ------------------------------------
   localparam logic [7:0] T_ADD       = "A";
   localparam logic [7:0] T_ADD_MPID  = "F";

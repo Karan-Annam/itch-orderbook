@@ -78,9 +78,11 @@ echo "==== running RTL tests ===="
 fail=0
 build_run test_itch_decode     sim/tests/test_itch_decode.cpp                 || fail=1
 build_run test_udp_strip       sim/tests/test_udp_strip.cpp                   || fail=1
+build_run test_framer_wide     sim/tests/test_framer_wide.cpp                 || fail=1
 build_run test_order_ref_table sim/tests/test_order_ref_table.cpp             || fail=1
 build_run test_book_update     sim/tests/test_book_update.cpp                 || fail=1
 build_run test_replace         sim/tests/test_replace.cpp                     || fail=1
+build_run test_overlap         sim/tests/test_overlap.cpp                     || fail=1
 build_run test_full_pipeline   sim/tests/test_full_pipeline.cpp sim/rtl_sim.itch 5000 || fail=1
 build_run tb_top               sim/tb_top.cpp                  sim/rtl_sim.itch       || fail=1
 

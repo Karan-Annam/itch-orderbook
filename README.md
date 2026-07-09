@@ -41,21 +41,32 @@ Software, per message (parse + book update, RDTSC, AVX2 on this machine):
 | Trade `P` (no book op) | ~35 ns | ~90 ns | |
 | Replace `U` (worst type) | ~260 ns | ~650 ns | |
 
-Hardware: ~344 ns for an Add at the modeled 250 MHz, every single time. Notice
-software's p50 (~190 ns) actually *beats* that. That's not a knock on the
-hardware, it's a fair result with a real explanation: the CPU is clocked
-16-20× higher (4-5 GHz vs 250 MHz) and is very good at exactly this kind of
-hot, branch-predictable, cache-resident integer work, while the RTL streams
-the message in one byte per cycle through the front end, so a 38-byte Add
-spends roughly half its ~86 cycles just shifting bytes in before book logic
-even starts. 250 MHz is also a conservative, unsynthesized clock target, not
-a placed-and-routed ceiling; a real FPGA build with a wider ingest path would
-close both gaps. So the honest comparison isn't "hardware wins on speed", it's
-that software's *best* case beats hardware's *only* case, but software's
-worst case is ~7× its own median (cache misses, OS jitter) while hardware's
-worst case equals its best case, every time, including during the bursts and
-volatility spikes when everyone else's software also slows down. That
-invariance, not a lower mean, is what an FPGA actually buys here.
+Hardware, replaying the same 20k-message stream at the modeled 250 MHz:
+
+| | before (byte-serial) | after (16 B/cycle + overlap) |
+|---|---|---|
+| service time p50 (1/throughput) | 200 ns (50 cyc) | **60 ns (15 cyc)** |
+| service time p99 | 248 ns | 84 ns |
+| throughput | ~5.0 M msg/s | **~20.9 M msg/s (4.2×)** |
+| total cycles, 20k messages | 1,006,092 | 239,458 |
+
+The front end originally streamed one byte per cycle, so a 38-byte Add spent
+~40 of its ~50 cycles just shifting bytes in. Two changes closed that: the
+ingest bus is now 16 bytes per cycle (a compacting-window framer handles
+messages starting and ending at any byte offset within a word), and ingest is
+decoupled from the book engine, so message N+1 streams in and is fully
+assembled while N is still being applied. Steady-state throughput is now
+engine-bound — a pure-Add stream commits every 8 cycles — and an Add arriving
+at an idle book commits ~60 ns after its first byte, which now beats
+software's ~190 ns p50 even at the conservative 250 MHz clock.
+
+The determinism story is unchanged and still the real point: software's worst
+case is ~7× its own median (cache misses, OS jitter) while hardware's p99.9
+service time equals its p99 (84 ns), every time, including during the bursts
+and volatility spikes when everyone else's software also slows down. The only
+hardware tail left is the occasional best-price scan after a level empties,
+which is bounded and visible in the perf counters rather than being a
+scheduler surprise.
 
 ![latency comparison](docs/img/latency_compare.png)
 
@@ -81,10 +92,12 @@ depth). Every SIMD routine has AVX-512 / AVX2 / scalar paths chosen at compile
 time; the scalar path is the test oracle.
 
 **Hardware** (`rtl/`): `udp_stripper → itch_framer → itch_decoder →
-order_ref_table → book_update_engine (+ best_tracker) → stats_engine`, one byte
-per clock, SRAM-backed. The message layouts in `ob_pkg.sv` mirror
-`itch_messages.hpp` exactly, so both sides decode identical bytes to identical
-fields.
+order_ref_table → book_update_engine (+ best_tracker) → stats_engine`, 16
+bytes per clock, SRAM-backed. The framer reassembles unaligned back-to-back
+messages out of the word stream with a 32-byte compacting window, and ingest
+of the next message overlaps the book update of the current one. The message
+layouts in `ob_pkg.sv` mirror `itch_messages.hpp` exactly, so both sides
+decode identical bytes to identical fields.
 
 **Verification**: the software suite is ~140k assertions including a 200k-op
 differential test of the hash table against `std::unordered_map` and a

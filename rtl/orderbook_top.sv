@@ -1,23 +1,27 @@
 // The full pipeline:
 //
-//   in_byte -> udp_stripper -> itch_framer -> itch_decoder
+//   in_data -> udp_stripper -> itch_framer -> itch_decoder
 //           -> book_update_engine (ref table + price SRAMs + best trackers)
 //           -> stats_engine / perf_counters
 //
-// One byte per cycle while in_ready is high; in_ready drops while a message is
-// being applied (Replace, best-price scans). Multi-field outputs are flattened
-// to scalars at this boundary so the Verilated C++ harness can read them.
+// Ingest is 16 bytes per cycle: each beat carries in_nbytes (1..16) valid
+// bytes packed from lane 0 (byte i at in_data[8*i +: 8]). in_ready drops only
+// when the framer's 32-byte window is full — i.e. while a message is being
+// applied (Replace, best-price scans) and the next messages have already been
+// buffered. Multi-field outputs are flattened to scalars at this boundary so
+// the Verilated C++ harness can read them.
 module orderbook_top
   import ob_pkg::*;
 (
-  input  logic       clk,
-  input  logic       rst,
-  input  logic       raw_mode,    // 1 = input is raw ITCH (no UDP wrapper)
+  input  logic                clk,
+  input  logic                rst,
+  input  logic                raw_mode,   // 1 = input is raw ITCH (no UDP wrapper)
 
-  input  logic [7:0] in_byte,
-  input  logic       in_valid,
-  input  logic       in_sop,      // first byte of a UDP frame (UDP mode only)
-  output logic       in_ready,
+  input  logic [WORD_W-1:0]   in_data,
+  input  logic [NBYTES_W-1:0] in_nbytes,
+  input  logic                in_valid,
+  input  logic                in_sop,     // first word of a UDP frame (UDP mode only)
+  output logic                in_ready,
 
   // ---- book state (testbench diff + inspection) --------------------------
   output logic                best_bid_valid,
@@ -62,6 +66,7 @@ module orderbook_top
   output logic [63:0]         hash_probe_2,
   output logic [63:0]         hash_probe_gt2,
   output logic [63:0]         pipeline_stall_cycles,
+  output logic [63:0]         ingest_stall_cycles,
   output logic [63:0]         cycle_count,
   output logic [63:0]         msg_total,
 
@@ -77,10 +82,15 @@ module orderbook_top
 );
 
   // stripper -> framer
-  logic [7:0] strip_byte;  logic strip_valid, strip_ready;
-  // framer -> decoder
-  logic [7:0] f_byte;      logic f_valid;  logic [5:0] f_offset;
-  logic       f_start, f_complete;  logic [15:0] f_len;
+  logic [WORD_W-1:0]   strip_data;
+  logic [NBYTES_W-1:0] strip_nbytes;
+  logic                strip_valid, strip_ready;
+  // framer -> decoder (body-aligned beats)
+  logic [WORD_W-1:0]   f_data;
+  logic [NBYTES_W-1:0] f_nbytes;
+  logic                f_beat_valid;
+  logic [WIDX_W-1:0]   f_widx;
+  logic                f_start, f_complete;  logic [15:0] f_len;
   // decoder -> engine
   decoded_t   dec;         logic dec_valid, dec_accept;
   // engine -> framer backpressure / telemetry
@@ -111,22 +121,26 @@ module orderbook_top
 
   udp_stripper u_strip (
     .clk(clk), .rst(rst), .raw_mode(raw_mode),
-    .in_byte(in_byte), .in_valid(in_valid), .in_sop(in_sop), .in_ready(in_ready),
-    .out_byte(strip_byte), .out_valid(strip_valid), .out_ready(strip_ready)
+    .in_data(in_data), .in_nbytes(in_nbytes), .in_valid(in_valid),
+    .in_sop(in_sop), .in_ready(in_ready),
+    .out_data(strip_data), .out_nbytes(strip_nbytes),
+    .out_valid(strip_valid), .out_ready(strip_ready)
   );
 
   itch_framer u_fr (
     .clk(clk), .rst(rst),
-    .in_byte(strip_byte), .in_valid(strip_valid), .in_ready(strip_ready),
-    .msg_byte(f_byte), .msg_byte_valid(f_valid), .msg_offset(f_offset),
-    .msg_start(f_start), .msg_complete(f_complete), .msg_len(f_len),
-    .engine_done(engine_done)
+    .in_data(strip_data), .in_nbytes(strip_nbytes),
+    .in_valid(strip_valid), .in_ready(strip_ready),
+    .msg_data(f_data), .msg_nbytes(f_nbytes), .msg_beat_valid(f_beat_valid),
+    .msg_widx(f_widx), .msg_start(f_start), .msg_complete(f_complete),
+    .msg_len(f_len),
+    .dec_pending(dec_valid)
   );
 
   itch_decoder u_dec (
     .clk(clk), .rst(rst),
-    .msg_byte(f_byte), .msg_byte_valid(f_valid), .msg_offset(f_offset),
-    .msg_complete(f_complete), .dec_accept(dec_accept),
+    .msg_data(f_data), .msg_nbytes(f_nbytes), .msg_beat_valid(f_beat_valid),
+    .msg_widx(f_widx), .msg_complete(f_complete), .dec_accept(dec_accept),
     .dec(dec), .dec_valid(dec_valid)
   );
 
@@ -164,6 +178,7 @@ module orderbook_top
     .ev_done(ev_done), .ev_type(ev_type), .busy(engine_busy),
     .any_scanning(any_scanning), .in_replace(in_replace),
     .lk_probe1(lk_p1), .lk_probe2(lk_p2), .lk_probe_gt2(lk_pg2),
+    .ingest_stall(!rst && !in_ready),
     .msg_count(msg_count_arr),
     .add_cycles(add_cycles), .delete_cycles(delete_cycles),
     .replace_cycles(replace_cycles), .scan_count(scan_count),
@@ -171,6 +186,7 @@ module orderbook_top
     .hash_probe_1(hash_probe_1), .hash_probe_2(hash_probe_2),
     .hash_probe_gt2(hash_probe_gt2),
     .pipeline_stall_cycles(pipeline_stall_cycles),
+    .ingest_stall_cycles(ingest_stall_cycles),
     .cycle_count(cycle_count), .msg_total(msg_total)
   );
 

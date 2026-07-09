@@ -14,7 +14,7 @@ same feed and measure the actual gap, not just repeat the folklore about it.
 So there are two implementations of the same book:
 
 - `sw/`: C++17, SIMD everywhere it pays, kernel-bypass-style receiver design
-- `rtl/`: synthesizable SystemVerilog, one byte per clock, everything in SRAM
+- `rtl/`: synthesizable SystemVerilog, 16 bytes per clock, everything in SRAM
 
 Both consume the same NASDAQ ITCH 5.0 byte stream and must produce identical
 book state. The RTL is diffed against a `std::map` reference model message by
@@ -77,11 +77,44 @@ udp_stripper → itch_framer → itch_decoder → order_ref_table
                                               → stats_engine, perf_counters
 ```
 
-One byte per cycle streams through the front end. Byte-swapping costs nothing in
-hardware, you just wire the bytes in the other order. The hash table and price
-levels are SRAMs; a single book is instantiated (single symbol), and the
-Verilator harness feeds it a single-symbol stream so the reference-model diff is
-exact.
+Sixteen bytes per cycle stream through the front end (the bus a 100G-class NIC
+would realistically hand you). Byte-swapping costs nothing in hardware, you
+just wire the bytes in the other order. The hash table and price levels are
+SRAMs; a single book is instantiated (single symbol), and the Verilator
+harness feeds it a single-symbol stream so the reference-model diff is exact.
+
+### The wide framer: a compacting window instead of case-splitting
+
+ITCH messages are length-prefixed and packed back-to-back with no alignment,
+so on a 16-byte bus a message can start and end at any byte offset within a
+word, and the 2-byte length prefix can straddle two words. Enumerating those
+straddle cases as FSM states gets ugly fast. Instead `itch_framer` keeps a
+32-byte *compacting window*: each cycle it consumes bytes from the front
+(2 for a length prefix, up to 16 for a body beat) and appends the incoming
+word at the back. A split length prefix stops being a special case — it's just
+"window occupancy < 2, wait a cycle". Body bytes are re-aligned on the way
+out, so the decoder always receives whole message-aligned 16-byte beats and
+its big-endian field extraction stays pure wiring.
+
+One property keeps this tractable: the minimum frame (2-byte prefix + 14-byte
+System body) exactly equals the word size, so at most one message can end
+inside any given word — the window never has to track more than "tail of the
+current message + head of the next".
+
+### Overlapping ingest with the book update
+
+Originally the framer parked itself until the engine finished applying each
+message, so a message's ingest and its book update were serialized. The
+decoder already holds the decoded message in a register (`dec`) until the
+engine accepts it, which is a free 1-deep buffer: the framer now only waits
+when the *next* message is fully assembled and the engine still hasn't taken
+the current one. Ingest of message N+1 (3-4 cycles) hides completely behind
+the book update of N (8-20 cycles), and steady-state throughput is
+engine-bound — a pure-Add stream commits every 8 cycles. A deeper FIFO would
+add nothing: the engine is the bottleneck, and it can't run above 100%
+occupancy. The invariant that makes it safe is that `msg_complete` is gated on
+the decoder being empty, so `dec` is never overwritten while pending and
+`dec_valid` always drops for at least one cycle between messages.
 
 ### Bug 1: deleting from a linear-probe table by clearing the slot
 
@@ -119,42 +152,38 @@ Software (this machine, AVX2 tier): p50 around 190 ns per message, p99 around
 540 ns, p99.9 around 1.3 µs. The tail is cache misses and OS jitter, nothing
 in the code path varies by 10× on its own.
 
-Hardware: ~86 cycles for an Add, so ~344 ns at the 250 MHz the pipeline is
-modeled at, and it's the *same* number every time.
+Hardware: with the original byte-serial front end, a mixed 20k-message stream
+sustained one commit every ~50 cycles (200 ns at the modeled 250 MHz) — a
+38-byte Add spent ~40 of those cycles just shifting bytes in, so software's
+~190 ns median actually beat it. That measurement is what motivated the
+current front end: a 16-byte-per-cycle ingest bus plus ingest/book-update
+overlap. Same stream now: service p50 = 15 cycles (60 ns), p99 = 21 cycles
+(84 ns), ~20.9M msg/s sustained — 4.2× the byte-serial throughput, and the
+`ingest_stall_cycles` counter confirms the engine (not ingest) is the
+bottleneck for 81% of the run. An Add arriving at an idle book commits ~60 ns
+after its first byte.
 
-Worth being honest about what's actually being compared here: software's
-*median* (~190 ns) is lower than hardware's number. That's a real result, not
-a bug, and it has three concrete causes, not just "software happened to be
-fast":
-
-1. **Clock speed.** The CPU runs at 4-5 GHz; the pipeline here is modeled at
-   250 MHz, roughly 16-20× slower. A superscalar, out-of-order x86 core is
-   also just very good at hot, predictable, cache-resident integer work
-   (parsing, hashing, array indexing), which is exactly what this hot path is.
-2. **The front end is byte-serial.** `udp_stripper → itch_framer →
-   itch_decoder` accepts one byte per cycle, so a 38-byte Add message spends
-   roughly half of its ~86 total cycles just shifting bytes in before any book
-   logic runs at all. That's a real architectural cost of choosing a simple,
-   easy-to-verify one-byte-wide datapath over a wider parallel ingest path.
-   A design reading 8 or 16 bytes/cycle (realistic off a 100G+ NIC) would cut
-   this component sharply.
-3. **250 MHz is a conservative, unsynthesized target,** not a
-   post-place-and-route ceiling. It was chosen as a number the design would
-   obviously close timing at without backend work. Real FPGA order-book
-   implementations commonly clock past 300-500 MHz; an ASIC would go higher
-   still. Combined with a wider front end, closing most or all of the
-   mean-latency gap is realistic, just not something this project measured.
-
-So the honest framing is: software's best case is genuinely faster than
-hardware's only case, for reasons above, not despite them. What hardware
-actually buys is not a lower mean, it's that the p99.9 *equals* the p50 (no
-cache misses are possible against SRAM with a fixed access latency, no OS
+So at the modeled clock the hardware now beats software's *median* while
+keeping the property that was always its real advantage: the p99.9 service
+time equals the p99 (no cache misses against fixed-latency SRAM, no OS
 scheduler, no other processes competing for the core), while software's
 p99.9 is ~7× its own median. That gap matters specifically because a real
 feed's worst moments (bursts, volatility, everyone's software degrading at
 once) are exactly when a fixed, boring latency number becomes a genuine edge
-rather than a nice-to-have. (Caveat, restated: 250 MHz is a modeled clock,
-not post-place-and-route timing.)
+rather than a nice-to-have. Two honest caveats stand:
+
+1. **250 MHz is a conservative, unsynthesized target,** not a
+   post-place-and-route ceiling — but the wide framer's compare/shift logic is
+   also shallow enough that it isn't the critical path; the async-read SRAMs
+   are (see Limitations).
+2. **The CPU still wins on raw clock.** A 4-5 GHz out-of-order core is
+   extremely good at hot, predictable, cache-resident integer work; the
+   hardware wins by doing less per message (no instruction stream at all),
+   not by switching faster.
+
+The remaining hardware tail is the occasional best-price scan after the top
+level empties — bounded, deterministic, and attributed cycle-by-cycle in the
+perf counters rather than being a scheduler surprise.
 
 ## Limitations
 

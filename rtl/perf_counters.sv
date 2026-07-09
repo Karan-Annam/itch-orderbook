@@ -1,7 +1,7 @@
 // Performance counters: per-type message counts (A,F,E,C,X,D,U,P,S),
 // engine-busy cycles by type, best-price scan count + total scan cycles,
-// hash probe-depth distribution (1 / 2 / >2), stall cycles, and
-// cycle/message totals for throughput.
+// hash probe-depth distribution (1 / 2 / >2), engine scan/replace occupancy,
+// ingest stall cycles, and cycle/message totals for throughput.
 module perf_counters
   import ob_pkg::*;
 (
@@ -16,6 +16,7 @@ module perf_counters
   input  logic        lk_probe1,
   input  logic        lk_probe2,
   input  logic        lk_probe_gt2,
+  input  logic        ingest_stall, // ingest blocked (in_ready low): window full behind a busy engine
 
   output logic [31:0] msg_count [9],
   output logic [63:0] add_cycles,
@@ -27,6 +28,7 @@ module perf_counters
   output logic [63:0] hash_probe_2,
   output logic [63:0] hash_probe_gt2,
   output logic [63:0] pipeline_stall_cycles,
+  output logic [63:0] ingest_stall_cycles,
   output logic [63:0] cycle_count,
   output logic [63:0] msg_total
 );
@@ -60,6 +62,7 @@ module perf_counters
       hash_probe_2          <= '0;
       hash_probe_gt2        <= '0;
       pipeline_stall_cycles <= '0;
+      ingest_stall_cycles   <= '0;
       cycle_count           <= '0;
       msg_total             <= '0;
       scan_d                <= 1'b0;
@@ -84,8 +87,12 @@ module perf_counters
 
       if (any_scanning)            scan_cycles_total <= scan_cycles_total + 1'b1;
       if (any_scanning && !scan_d) scan_count        <= scan_count + 1'b1;
+      // engine occupancy attributable to scans/Replace (ingest is overlapped,
+      // so this is not an input-stall measure — ingest_stall_cycles is)
       if (busy && (any_scanning || in_replace))
         pipeline_stall_cycles <= pipeline_stall_cycles + 1'b1;
+      if (ingest_stall)
+        ingest_stall_cycles <= ingest_stall_cycles + 1'b1;
 
       if (lk_probe1)    hash_probe_1   <= hash_probe_1   + 1'b1;
       if (lk_probe2)    hash_probe_2   <= hash_probe_2   + 1'b1;
