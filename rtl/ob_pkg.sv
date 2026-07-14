@@ -27,12 +27,40 @@ package ob_pkg;
   localparam int LOCATE_W  = 16;
 
   // ---- table / book sizing ------------------------------------------------
-  localparam int TABLE_SIZE = 1 << 16;   // 64K order-ref hash slots
-  localparam int HASH_W     = 16;
+  // The full sizes are a simulation convenience: 2x 64 Mb async-read price
+  // SRAM plus a 9.6 Mb hash table cannot exist in FPGA fabric (async read
+  // maps only to LUTRAM, and every extra read port replicates the array).
+  // Under synthesis (Vivado predefines SYNTHESIS) shrink to fit the Urbana
+  // board's Spartan-7 XC7S50 (~600 Kb distributed RAM total).
+  //
+  // The book is PRICE-BANDED: level address = price - band_base, where
+  // band_base auto-centers on the first Add (BAND_AUTO_INIT) and is fixed
+  // thereafter. Events priced outside [band_base, band_base+PRICE_LEVELS)
+  // are dropped whole and counted (band_drops) — never partially applied.
+  // In simulation the window spans the generator's entire price space and
+  // band_base stays 0, so behaviour is identical to the unbanded book; the
+  // banded/synthesis config is exercised by test_banding against a second
+  // Verilated model built with +define+SYNTHESIS.
+`ifdef SYNTHESIS
+  // Table sizing: with insert-at-remembered-tomb (order_ref_table) the table
+  // saturates to live-or-tomb under churn and keeps working, so capacity is
+  // bounded by peak LIVE orders (~1k on the real AAPL excerpt), not by
+  // cumulative churn. 4096 slots x 147b ~= 17 RAMB36; 8192 doubled the BRAM
+  // column spread and lost 1.2 ns of post-route slack at 100 MHz. A nonzero
+  // tbl_ins_fails means this is undersized for the stream.
+  localparam int TABLE_SIZE   = 1 << 12;
+  localparam int HASH_W       = 12;
+  localparam int PRICE_LEVELS = 1 << 10;
+  localparam int LEVEL_AW     = 10;
+  localparam bit BAND_AUTO_INIT = 1'b1;  // center band on the first Add
+`else
+  localparam int TABLE_SIZE   = 1 << 16; // 64K order-ref hash slots
+  localparam int HASH_W       = 16;
+  localparam int PRICE_LEVELS = 1 << 20; // covers all generator prices
+  localparam int LEVEL_AW     = 20;
+  localparam bit BAND_AUTO_INIT = 1'b0;  // band_base pinned to 0
+`endif
   localparam int MAX_PROBE  = 64;        // linear-probe bound
-
-  localparam int PRICE_LEVELS = 1 << 20; // direct-indexed price array
-  localparam int LEVEL_AW      = 20;
 
   localparam int MSG_MAX_BYTES = 48;     // Trade('P') body = 46; pad to 48
 
@@ -110,9 +138,20 @@ package ob_pkg;
     logic [31:0] order_count;
   } level_t;
 
-  // hardware-friendly XOR-fold hash: pure wires.
+  // Fibonacci-style multiplicative hash (one DSP, comb between registers).
+  // The original XOR fold mapped real NASDAQ order refs — which are
+  // near-sequential — onto dense runs of ADJACENT slots, exactly what
+  // defeats linear probing: on real data the probe chains saturated and
+  // inserts failed (caught by tbl_ins_fails). The golden-ratio multiply
+  // scatters sequential inputs; top HASH_W bits of the mod-2^25 product.
+  // Mirrored in C++ by sim/tests/test_order_ref_table.cpp — keep in sync.
   function automatic logic [HASH_W-1:0] hash_ref(input logic [REF_W-1:0] r);
-    hash_ref = r[63:48] ^ r[47:32] ^ r[31:16] ^ r[15:0];
+    logic [31:0] x;
+    logic [24:0] y, p;
+    x = r[31:0] ^ r[63:32];
+    y = x[24:0] ^ {x[31:25], 18'b0};
+    p = 25'(y * 25'h13C6EF5);
+    hash_ref = HASH_W'(p >> (25 - HASH_W));
   endfunction
 
   // order-ref table operations

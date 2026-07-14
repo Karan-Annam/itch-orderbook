@@ -35,6 +35,10 @@ struct GenConfig {
     uint32_t max_price    = 999990;   // keep within a 1,000,000-entry book array
     uint32_t min_price    = 10000;    // $1.0000
     uint32_t max_shares   = 1000;
+    // Trading-engine extensions. Defaults keep every existing seeded stream
+    // byte-identical (no extra RNG draws, same timestamps).
+    uint32_t aggress_prob = 0;        // % of steps that sweep the touch instead
+    uint64_t ts_scale     = 1;        // clock multiplier (bars need real spans)
 };
 
 struct GenStats {
@@ -92,7 +96,13 @@ private:
     };
 
     void step() {
-        ts_ += 1 + (rng_() % 50);  // advance clock a few ns
+        ts_ += (1 + (rng_() % 50)) * cfg_.ts_scale;  // advance clock
+        if (cfg_.aggress_prob > 0 && (rng_() % 100) < cfg_.aggress_prob) {
+            emit_sweep();
+            if (live_.size() > stats_.live_orders_peak)
+                stats_.live_orders_peak = live_.size();
+            return;
+        }
         const int roll = int(rng_() % 100);
         // Bias toward Add early so there is inventory to modify.
         const bool need_inventory = live_.size() < 16;
@@ -176,9 +186,37 @@ private:
         live_.pop_back();
     }
 
+    // Aggressor sweep: execute the order at the touch, front of queue first
+    // (highest bid / lowest ask, oldest ref on ties — price-time priority).
+    // Drains queues front-first and prints trades at the touch without ever
+    // crossing the book, so the never-crossed invariant holds and the RTL
+    // equivalence stream stays valid.
+    void emit_sweep() {
+        const int sym = int(rng_() % cfg_.num_symbols);
+        const uint16_t locate = uint16_t(sym + 1);
+        const char side = (rng_() & 1) ? SIDE_BUY : SIDE_SELL;
+        int best = -1;
+        for (int i = 0; i < int(live_.size()); ++i) {
+            const LiveOrder& o = live_[i];
+            if (o.stock_locate != locate || o.side != side) continue;
+            if (best < 0) { best = i; continue; }
+            const LiveOrder& b = live_[best];
+            const bool better = (side == SIDE_BUY)
+                ? (o.price > b.price || (o.price == b.price && o.ref < b.ref))
+                : (o.price < b.price || (o.price == b.price && o.ref < b.ref));
+            if (better) best = i;
+        }
+        if (best < 0) { emit_add(false); return; }
+        exec_at(best, false);
+    }
+
     void emit_execute(bool with_price) {
         int i = pick_live();
         if (i < 0) { emit_add(false); return; }
+        exec_at(i, with_price);
+    }
+
+    void exec_at(int i, bool with_price) {
         LiveOrder& o = live_[i];
         uint32_t ex = 1 + uint32_t(rng_() % o.shares);
         if (with_price) {

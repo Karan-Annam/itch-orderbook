@@ -62,17 +62,24 @@ def _read_stock(b: bytes, off: int) -> str:
 # Project fields start at offset 13 (after 13-byte header).
 # We just re-emit via itch_writer functions (which build the 13-byte header).
 
-def _convert(body: bytes, ts48: int, locate: int, tracking: int) -> bytes | None:
+def _convert(body: bytes, ts48: int, locate: int, tracking: int,
+             tick_scale: int = 1) -> bytes | None:
     """
     Convert a real ITCH body (11-byte header + type-specific payload) to project
     format. Returns length-prefixed project bytes, or None for unsupported types.
     ts48 is already extracted from the header.
+
+    tick_scale integer-divides every price field. Real ITCH prices are in
+    1/10000-dollar units; tick_scale=100 re-grids to cents, which puts $100-500
+    symbols at 10k-50k ticks — inside the RTL's banded FPGA window (1024 ticks
+    = $10.24 of range) as long as the symbol moves less than that in a day.
     """
     if not body:
         return None
     mtype = chr(body[0])
     # Type-specific fields are at offset 11 in real ITCH (right after the real header)
     p = 11  # payload start in real body
+    scale = max(1, int(tick_scale))
 
     try:
         if mtype == 'A':
@@ -80,7 +87,7 @@ def _convert(body: bytes, ts48: int, locate: int, tracking: int) -> bytes | None
             side   = chr(body[p]);           p += 1
             shares = _read_u32(body, p);     p += 4
             stock  = _read_stock(body, p);   p += 8
-            price  = _read_u32(body, p)
+            price  = _read_u32(body, p) // scale
             return add_order(locate=locate, tracking=tracking, timestamp_ns=ts48,
                              order_ref=oref, side=side, shares=shares,
                              stock=stock, price=price)
@@ -90,7 +97,7 @@ def _convert(body: bytes, ts48: int, locate: int, tracking: int) -> bytes | None
             side   = chr(body[p]);           p += 1
             shares = _read_u32(body, p);     p += 4
             stock  = _read_stock(body, p);   p += 8
-            price  = _read_u32(body, p);     p += 4
+            price  = _read_u32(body, p) // scale;  p += 4
             mpid   = body[p:p+4].decode('ascii', errors='replace')
             return add_order_mpid(locate=locate, tracking=tracking, timestamp_ns=ts48,
                                   order_ref=oref, side=side, shares=shares,
@@ -108,7 +115,7 @@ def _convert(body: bytes, ts48: int, locate: int, tracking: int) -> bytes | None
             shares = _read_u32(body, p);     p += 4
             match  = _read_u64(body, p);     p += 8
             prtbl  = chr(body[p]) == 'Y';    p += 1
-            price  = _read_u32(body, p)
+            price  = _read_u32(body, p) // scale
             return order_executed_price(locate=locate, tracking=tracking,
                                         timestamp_ns=ts48, order_ref=oref,
                                         exec_shares=shares, match_number=match,
@@ -129,7 +136,7 @@ def _convert(body: bytes, ts48: int, locate: int, tracking: int) -> bytes | None
             orig   = _read_u64(body, p);     p += 8
             new    = _read_u64(body, p);     p += 8
             shares = _read_u32(body, p);     p += 4
-            price  = _read_u32(body, p)
+            price  = _read_u32(body, p) // scale
             return order_replace(locate=locate, tracking=tracking, timestamp_ns=ts48,
                                  orig_ref=orig, new_ref=new, shares=shares, price=price)
 
@@ -138,7 +145,7 @@ def _convert(body: bytes, ts48: int, locate: int, tracking: int) -> bytes | None
             side   = chr(body[p]);           p += 1
             shares = _read_u32(body, p);     p += 4
             stock  = _read_stock(body, p);   p += 8
-            price  = _read_u32(body, p);     p += 4
+            price  = _read_u32(body, p) // scale;  p += 4
             match  = _read_u64(body, p)
             return trade(locate=locate, tracking=tracking, timestamp_ns=ts48,
                          order_ref=oref, side=side, shares=shares, stock=stock,
@@ -162,6 +169,9 @@ def convert_file(src_path: str, dest_path: str,
                  locate_filter: set[int] | None = None,
                  symbol_filter: str | None = None,
                  max_msgs: int = 0,
+                 tick_scale: int = 1,
+                 after_ns: int = 0,
+                 extra_meta: dict | None = None,
                  verbose: bool = True) -> dict:
     """
     Read a real NASDAQ ITCH 5.0 file (optionally .gz), normalise to project
@@ -174,6 +184,12 @@ def convert_file(src_path: str, dest_path: str,
         symbol_filter:  If set, only keep Add/Trade messages with this stock name.
                         (Used to build the locate set from the first pass.)
         max_msgs:       Stop after this many output messages (0 = unlimited).
+        tick_scale:     Integer-divide all price fields (e.g. 100 = cent grid;
+                        makes real symbols fit the RTL's banded FPGA window).
+                        Recorded in a <dest>.meta.json sidecar when != 1.
+        after_ns:       Skip messages with timestamp < this (ns since midnight);
+                        e.g. 34_200e9 = 09:30, avoids pre-market stub quotes
+                        mis-centering the auto-set band.
         verbose:        Print progress.
 
     Returns:
@@ -218,8 +234,12 @@ def convert_file(src_path: str, dest_path: str,
                 stats['skipped'] += 1
                 continue
 
+            if after_ns and ts48 < after_ns:
+                stats['skipped'] += 1
+                continue
+
             # Convert to project format
-            proj = _convert(body, ts48, locate, tracking)
+            proj = _convert(body, ts48, locate, tracking, tick_scale)
             if proj is None:
                 stats['skipped'] += 1
                 continue
@@ -235,10 +255,22 @@ def convert_file(src_path: str, dest_path: str,
     with open(dest_path, 'wb') as f:
         f.write(data)
 
+    # sidecar so downstream consumers know the price grid was re-scaled
+    if tick_scale != 1 or extra_meta:
+        import json
+        meta = {'source': os.path.basename(src_path),
+                'tick_scale': int(tick_scale),
+                'output_msgs': stats['output_msgs']}
+        if extra_meta:
+            meta.update(extra_meta)
+        with open(dest_path + '.meta.json', 'w') as f:
+            json.dump(meta, f, indent=2)
+
     if verbose:
         print(f"[nasdaq_itch] {src_path}: "
-              f"{stats['input_msgs']:,} in → {stats['output_msgs']:,} out "
-              f"({stats['skipped']:,} skipped) → {stats['bytes_out']:,} bytes")
+              f"{stats['input_msgs']:,} in -> {stats['output_msgs']:,} out "
+              f"({stats['skipped']:,} skipped) -> {stats['bytes_out']:,} bytes"
+              + (f"  [tick_scale={tick_scale}]" if tick_scale != 1 else ""))
     return stats
 
 
@@ -285,7 +317,16 @@ if __name__ == '__main__':
     ap.add_argument('dest', help='Output project-format .itch file')
     ap.add_argument('--symbol', help='Filter to this ticker (e.g. AAPL)')
     ap.add_argument('--max', type=int, default=0, help='Stop after N output messages')
+    ap.add_argument('--tick-scale', type=int, default=1,
+                    help='Integer-divide prices (100 = cent grid, fits the FPGA band window)')
+    ap.add_argument('--after-hm', default=None, metavar='HH:MM',
+                    help='Skip messages before this time of day (e.g. 09:30)')
     args = ap.parse_args()
+
+    after_ns = 0
+    if args.after_hm:
+        hh, mm = args.after_hm.split(':')
+        after_ns = (int(hh) * 3600 + int(mm) * 60) * 1_000_000_000
 
     loc_filter = None
     if args.symbol:
@@ -296,4 +337,11 @@ if __name__ == '__main__':
         else:
             print(f'[nasdaq_itch] locate codes: {loc_filter}')
 
-    convert_file(args.src, args.dest, locate_filter=loc_filter, max_msgs=args.max)
+    extra = {}
+    if args.symbol:
+        extra['symbol'] = args.symbol.upper()
+        if loc_filter:
+            extra['locates'] = sorted(loc_filter)
+    convert_file(args.src, args.dest, locate_filter=loc_filter, max_msgs=args.max,
+                 tick_scale=args.tick_scale, after_ns=after_ns,
+                 extra_meta=extra or None)

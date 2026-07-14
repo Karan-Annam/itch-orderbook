@@ -46,9 +46,21 @@ public:
         for (int w = 0; w < 4; ++w) top_->in_data[w] = 0;
         top_->in_nbytes = 0;
         top_->raw_mode = raw_mode ? 1 : 0;
+        top_->mold_mode = 0;
+        top_->band_cfg_valid = 0; top_->band_cfg_base = 0;
         top_->dbg_is_bid = 0; top_->dbg_price = 0;
         for (int i = 0; i < 6; ++i) tick();
         top_->rst = 0;
+    }
+
+    // pin the band window (banded/SYNTHESIS builds; call before driving traffic)
+    void set_band(uint32_t base) {
+        top_->band_cfg_base  = base;
+        top_->band_cfg_valid = 1;
+        tick();
+        top_->band_cfg_valid = 0;
+        top_->band_cfg_base  = 0;
+        tick();
     }
 
     // Drive the stream. on_commit(index) is called after the Nth message has

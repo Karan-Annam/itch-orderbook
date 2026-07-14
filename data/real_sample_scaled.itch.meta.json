@@ -1,0 +1,12 @@
+{
+  "source": "12302019.NASDAQ_ITCH50.gz",
+  "tick_scale": 100,
+  "output_msgs": 49947,
+  "symbol": "AAPL",
+  "locates": [
+    13
+  ],
+  "band_base": 28242,
+  "band_window": 1024,
+  "band_center": 28754
+}

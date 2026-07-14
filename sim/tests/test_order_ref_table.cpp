@@ -1,31 +1,38 @@
 // test_order_ref_table.cpp — RTL hash table insert/lookup/delete + collisions.
 //
-// The hardware hash is an XOR-fold of the 64-bit ref into 16 bits:
-//   idx = ref[63:48]^[47:32]^[31:16]^[15:0]
-// We deliberately construct many distinct refs that all fold to the SAME index
-// (ref = {0,0,a,a^H} folds to H for any a), forcing a long linear-probe chain,
-// then exercise lookup (Execute) and delete on every one. Correct book updates
-// prove insert/lookup/delete + collision handling; the probe-distribution perf
-// counters must show the collisions actually occurred.
+// The hardware hash is a Fibonacci-style multiplicative hash (mirrored below —
+// keep in sync with ob_pkg::hash_ref). Algebraic collision construction isn't
+// practical against a multiply, so we SEARCH for refs that hash to one index,
+// forcing a long linear-probe chain, then exercise lookup (Execute) and delete
+// on every one. Correct book updates prove insert/lookup/delete + collision
+// handling; the probe-distribution perf counters must show the collisions
+// actually occurred.
 #include "scenario.hpp"
 
 using namespace obsim;
+
+// mirror of ob_pkg::hash_ref (sim config: HASH_W=16)
+static uint16_t hw_hash(uint64_t r) {
+    uint32_t x = uint32_t(r) ^ uint32_t(r >> 32);
+    uint32_t y = (x & 0x1FFFFFF) ^ ((x >> 25) << 18);
+    uint32_t p = (y * 0x13C6EF5u) & 0x1FFFFFF;
+    return uint16_t(p >> (25 - 16));
+}
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     TestCtx ctx{0, 0, "order_ref_table"};
 
-    const uint16_t H = 0x1234;
     const uint32_t PX = 200000;          // all rest at one price level
     const int   N = 24;
 
     std::vector<uint64_t> refs;
     std::vector<uint8_t> s;
-    for (int a = 1; a <= N; ++a) {
-        uint64_t lo = uint16_t(a) ^ H;
-        uint64_t ref = (uint64_t(uint16_t(a)) << 16) | lo;   // folds to H
-        refs.push_back(ref);
-        append(s, add(ref, 'B', 10, PX, 1));                 // each adds 10 shares
+    const uint16_t H = hw_hash(1);       // target slot: wherever ref 1 lands
+    for (uint64_t r = 1; refs.size() < size_t(N); ++r) {
+        if (hw_hash(r) != H) continue;
+        refs.push_back(r);
+        append(s, add(r, 'B', 10, PX, 1));                   // each adds 10 shares
     }
     // Execute half by 10 (removes them), delete the rest.
     for (int i = 0; i < N; ++i) {

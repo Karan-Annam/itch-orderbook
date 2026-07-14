@@ -38,15 +38,35 @@ module stats_engine
   output logic [31:0]         msg_rate
 );
 
-  // VWAP + trade count
+  // VWAP + trade count.
+  // Two stages: the 32x32 product is registered before the 64-bit accumulate.
+  // A single-cycle multiply-accumulate was the design's only failing path at
+  // 100 MHz on Spartan-7; the product register folds into the DSP48 pipeline.
+  // num/den/count all update from the staged event so a reader never sees a
+  // torn num/den pair, and the staged update lands no later than the edge
+  // where the commit becomes observable (perf_counters registers ev_done,
+  // which trails trade_valid by >=1 cycle), so per-commit testbench diffs
+  // still hold.
+  logic        tv_q;
+  logic [63:0] prod_q, sh_q;
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      tv_q <= 1'b0;
+    end else begin
+      tv_q   <= trade_valid;
+      prod_q <= 64'(trade_price) * 64'(trade_shares);
+      sh_q   <= 64'(trade_shares);
+    end
+  end
+
   always_ff @(posedge clk) begin
     if (rst) begin
       vwap_num    <= '0;
       vwap_den    <= '0;
       trade_count <= '0;
-    end else if (trade_valid) begin
-      vwap_num    <= vwap_num + (64'(trade_price) * 64'(trade_shares));
-      vwap_den    <= vwap_den + 64'(trade_shares);
+    end else if (tv_q) begin
+      vwap_num    <= vwap_num + prod_q;
+      vwap_den    <= vwap_den + sh_q;
       trade_count <= trade_count + 1'b1;
     end
   end

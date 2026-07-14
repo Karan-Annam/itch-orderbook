@@ -4,7 +4,11 @@
 // Usage:
 //   orderbook_sw [file=data/sample.itch] [--gen N] [--symbol L] [--csv DIR]
 //                [--engine {simd|map}] [--ladder DIR] [--ladder-depth K]
-//                [--ladder-every N] [--pin CORE] [--quiet]
+//                [--ladder-every N] [--pin CORE] [--quiet] [--mold]
+//
+// --mold treats the input file as MoldUDP64 packets (tools/mold_wrap output):
+// decapped up front (gap/stale accounting printed) so the replay path below
+// is identical either way.
 //
 // --engine simd  (default) runs the direct-indexed SIMD book (BookEngine)
 // --engine map             runs the std::map reference book (ReferenceBook)
@@ -13,6 +17,7 @@
 // messages; only available with --engine simd (the map book has equivalent accessors
 // but the ladder is used for the depth-chart visualisation which uses the SIMD book).
 #include "parser/itch_parser.hpp"
+#include "parser/mold_parser.hpp"
 #include "book/order_book.hpp"
 #include "book/reference_book.hpp"
 #include "stats/stats_engine.hpp"
@@ -50,6 +55,8 @@ int main(int argc, char** argv) {
     int      ladder_depth = 10;
     int      ladder_every = 1000;
     bool     quiet        = false;
+    bool     mold_in      = false;
+    bool     final_state  = false;
     int      pin_core     = -1;
 
     for (int i = 1; i < argc; ++i) {
@@ -62,6 +69,8 @@ int main(int argc, char** argv) {
         else if (a == "--ladder-depth" && i + 1 < argc) ladder_depth = std::atoi(argv[++i]);
         else if (a == "--ladder-every" && i + 1 < argc) ladder_every = std::atoi(argv[++i]);
         else if (a == "--pin"          && i + 1 < argc) pin_core = std::atoi(argv[++i]);
+        else if (a == "--mold")                          mold_in = true;
+        else if (a == "--final-state")                   final_state = true;
         else if (a == "--quiet")                         quiet = true;
         else if (a[0] != '-')                            file = a;
     }
@@ -100,6 +109,21 @@ int main(int argc, char** argv) {
         rx.load_bytes(g.generate(100000));
     } else {
         std::printf("[load] %s: %zu bytes\n", file.c_str(), rx.size());
+    }
+
+    // --mold: decap MoldUDP64 packets to the plain length-prefixed stream up
+    // front, so the measured replay path below stays identical either way.
+    if (mold_in) {
+        std::vector<uint8_t> plain;
+        plain.reserve(rx.size());
+        MoldStats ms = MoldParser::decap(rx.data(), rx.size(), plain);
+        std::printf("[mold] %llu packets (%llu heartbeats, %llu stale), %llu msgs, "
+                    "gaps: %llu events / %llu msgs lost, session_end=%d%s\n",
+                    (unsigned long long)ms.packets, (unsigned long long)ms.heartbeats,
+                    (unsigned long long)ms.stale_packets, (unsigned long long)ms.messages,
+                    (unsigned long long)ms.gap_events, (unsigned long long)ms.gap_msgs,
+                    ms.session_end ? 1 : 0, ms.truncated ? " [TRUNCATED]" : "");
+        rx.load_bytes(plain);
     }
 
     // ---- setup --------------------------------------------------------------
@@ -326,6 +350,22 @@ int main(int argc, char** argv) {
     }
 
     std::printf("  total messages processed: %llu\n", (unsigned long long)seq);
+
+    // --final-state: one machine-readable line for diffing against the RTL
+    // banded replay and the hardware snapshot (tools/run_real_data.sh,
+    // tools/ob_host.py verify). simd mode only (map mode lacks the stats).
+    if (final_state && engine) {
+        const OrderBook* b = engine->book(primary);
+        std::printf("FINAL bid_px=%u bid_sh=%u ask_px=%u ask_sh=%u spread=%u "
+                    "vwap_num=%llu vwap_den=%llu trades=%llu msgs=%llu\n",
+                    b ? b->best_bid() : 0, b ? b->best_bid_depth() : 0,
+                    b ? b->best_ask() : 0, b ? b->best_ask_depth() : 0,
+                    b ? b->spread() : 0,
+                    (unsigned long long)stats.vwap_numerator(),
+                    (unsigned long long)stats.vwap_denominator(),
+                    (unsigned long long)stats.trade_count(),
+                    (unsigned long long)seq);
+    }
 
     // ---- CSVs ---------------------------------------------------------------
     if (!csv_dir.empty()) {

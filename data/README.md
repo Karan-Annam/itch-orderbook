@@ -27,25 +27,61 @@ The same file is replayed by both the C++ software pipeline and the RTL
 Verilator harness, which is what makes the software-vs-hardware comparison
 apples-to-apples.
 
-## 2. Real NASDAQ ITCH sample files (optional)
+## 2. Real NASDAQ ITCH sample files
 
-NASDAQ publishes full-day historical ITCH 5.0 recordings:
-
-- <ftp://emi.nasdaq.com/ITCH/> (e.g. `01302019.NASDAQ_ITCH50.gz`)
-- Protocol spec: search "NASDAQ TotalView-ITCH 5.0 specification".
-
-Download, `gunzip`, and point the binary at it:
+NASDAQ publishes free full-day TotalView-ITCH 5.0 recordings (several GB
+gzipped). Raw days live in the gitignored `data/real/`:
 
 ```bash
-build/orderbook_sw path/to/01302019.NASDAQ_ITCH50 --symbol 1 --csv build/csv
+curl -o data/real/12302019.NASDAQ_ITCH50.gz \
+  "https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/12302019.NASDAQ_ITCH50.gz"
 ```
 
-> Note: real ITCH 5.0 uses a **6-byte** timestamp; this project uses an
-> **8-byte** timestamp internally (SW, RTL, and the generator all agree, so
-> everything here is self-consistent).
-> To ingest unmodified NASDAQ files, set the timestamp width to 6 bytes in
-> `sw/parser/itch_messages.hpp` (`hdr::TIMESTAMP`/body lengths) and the matching
-> `rtl/ob_pkg.sv` constants. The synthetic generator and the whole test suite
-> use the 8-byte convention end to end.
+Real ITCH 5.0 uses a **6-byte** timestamp and an 11-byte header; the project
+format keeps **8-byte** timestamps (deliberate: the RTL framer's 16-byte
+minimum-frame invariant — at most one message end per ingest word — depends
+on it; see `rtl/ob_pkg.sv`). `gui/data/nasdaq_itch.py` is the normalization
+stage every real feed handler has anyway: it reads the .gz directly, keeps
+the 9 modeled types, filters one symbol, and re-grids prices:
 
-Real ITCH files are **not committed** to the repository (size + licensing).
+```bash
+python -m gui.data.nasdaq_itch data/real/12302019.NASDAQ_ITCH50.gz \
+    data/real/aapl_50k_scaled.itch \
+    --symbol AAPL --max 50000 --tick-scale 100 --after-hm 09:35
+python tools/band_filter.py data/real/aapl_50k_scaled.itch \
+    data/real_sample_scaled.itch --window 1024
+```
+
+`band_filter.py` fits the stream into one 1024-tick window (median-of-adds
+center): out-of-window Adds are dropped whole and Replaces that move an order
+out of the window become Deletes — semantics both the software and the banded
+hardware book apply identically, which is what makes the final-state diff
+exact. It records `band_base` in the sidecar; the replay tools send it to the
+hardware via the SET_BAND link frame before streaming. Start at 09:35, not
+09:30 — the opening auction leaves a legitimately crossed book whose orders
+are removed by Cross-Trade messages the project doesn't model.
+
+`data/real_sample_scaled.itch` is the one committed real-data artifact: a
+small regular-session excerpt used by `tools/run_real_data.sh` (software ==
+full-RTL == banded-RTL triple agreement) and the hardware acceptance demo
+(`tools/ob_host.py verify`).
+
+### Why --tick-scale 100 and the band filter
+
+The FPGA build's banded book covers a **1024-tick window**:
+
+| tick grid | window span | verdict |
+|-----------|-------------|---------|
+| raw (1/10000 $) | $0.1024 | useless — any symbol walks out in minutes |
+| cents (`--tick-scale 100`) | $10.24 | fits any symbol whose day range < $10 |
+
+At cent ticks a $290 symbol sits at 29,000 — inside both the full simulation
+window (2²⁰, so the reference-model diff runs on real data unchanged) and the
+banded window. `tools/run_real_data.sh` asserts `band_drops == 0` and
+`tbl_ins_fails == 0`; a volatile symbol that trips the former needs a larger
+scale (500 = nickel grid). The `<file>.meta.json` sidecar records the scale,
+locate codes, and band base.
+
+Production sizing note: a real deployment would widen `PRICE_LEVELS` (BRAM
+remap + band re-centering) rather than coarsen the grid; the tick scale is
+the zero-RTL-churn way to run real data through the 1024-level demo build.

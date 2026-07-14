@@ -27,6 +27,7 @@ module udp_stripper
   output logic [WORD_W-1:0]   out_data,
   output logic [NBYTES_W-1:0] out_nbytes,
   output logic                out_valid,
+  output logic                out_sop,    // first payload beat of a datagram
   input  logic                out_ready
 );
 
@@ -55,6 +56,11 @@ module udp_stripper
       out_valid  = in_valid && !hdr_word;
     end
   end
+
+  // datagram boundary for downstream decap layers (mold_stripper). A datagram
+  // with no payload past the 42-byte header never asserts out_valid, so it
+  // produces no sop — such datagrams carry nothing to delimit.
+  assign out_sop = split_word && out_valid;
 
   // in_ready must not depend on in_valid/in_sop: the driver samples it before
   // presenting a word, so it has to stay true for whatever arrives next cycle.

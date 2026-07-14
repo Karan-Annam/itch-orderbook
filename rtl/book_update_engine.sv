@@ -1,8 +1,15 @@
-// Applies decoded ITCH events to the book. Owns the direct price-indexed level
-// SRAMs (bid_mem/ask_mem, async read), the order_ref_table, and two
-// best_trackers. A single FSM serializes each message; the framer holds input
-// (engine_done backpressure) until it's fully applied. Replace is
-// remove-then-add on the original side.
+// Applies decoded ITCH events to the book. Owns the price-banded level SRAMs
+// (per-side shares/count arrays, async read, level address = price -
+// band_base), the order_ref_table, and two best_trackers. A single FSM
+// serializes each message; the framer holds input (engine_done backpressure)
+// until it's fully applied. Replace is remove-then-add on the original side.
+//
+// Banding: band_base auto-centers on the first Add (BAND_AUTO_INIT) and is
+// fixed for the session. Adds and replace-adds priced outside
+// [band_base, band_base+PRICE_LEVELS) are dropped whole (counted in
+// band_drops) before touching the table or counters, so the book never holds
+// partial state for them. Table lookups can only return in-window prices
+// because only in-window adds are ever inserted.
 //
 // Trade-event note: Execute(E) carries no price, so after the table lookup the
 // engine emits the trade at the order's RESTING price; Execute-with-price(C)
@@ -30,6 +37,18 @@ module book_update_engine
   output logic [63:0]         tot_bid_vol,
   output logic [63:0]         tot_ask_vol,
 
+  // price-band config: pulse band_cfg_valid (before streaming traffic) to pin
+  // the window to [band_cfg_base, band_cfg_base+PRICE_LEVELS) — how a host
+  // configures a real symbol's range. Without it the first Add auto-centers
+  // the band, which is fragile on real feeds (the first quote of the session
+  // is often far from where the symbol actually trades).
+  input  logic                band_cfg_valid,
+  input  logic [PRICE_W-1:0]  band_cfg_base,
+
+  // price-band telemetry
+  output logic [PRICE_W-1:0]  band_base,
+  output logic [31:0]         band_drops,
+
   // debug/query level read port (async): returns shares & order_count
   input  logic                dbg_is_bid,
   input  logic [PRICE_W-1:0]  dbg_price,
@@ -48,17 +67,23 @@ module book_update_engine
   output logic                in_replace,
   output logic                lk_probe1,
   output logic                lk_probe2,
-  output logic                lk_probe_gt2
+  output logic                lk_probe_gt2,
+  output logic [31:0]         tbl_ins_fails
 );
 
   // ---- price-level SRAMs --------------------------------------------------
-  level_t bid_mem [PRICE_LEVELS];
-  level_t ask_mem [PRICE_LEVELS];
+  // One array per level_t field rather than one struct array: RAM inference
+  // needs every write to be a whole word, and S_MOD_LVL writes shares and
+  // count under different conditions.
+  logic [31:0] bid_shares_mem [PRICE_LEVELS];
+  logic [31:0] bid_count_mem  [PRICE_LEVELS];
+  logic [31:0] ask_shares_mem [PRICE_LEVELS];
+  logic [31:0] ask_count_mem  [PRICE_LEVELS];
 
   initial begin
     for (int i = 0; i < PRICE_LEVELS; i++) begin
-      bid_mem[i] = '0;
-      ask_mem[i] = '0;
+      bid_shares_mem[i] = '0; bid_count_mem[i] = '0;
+      ask_shares_mem[i] = '0; ask_count_mem[i] = '0;
     end
   end
 
@@ -86,44 +111,59 @@ module book_update_engine
     .busy(tbl_busy), .done(tbl_done), .res_found(tbl_found),
     .res_price(tbl_price), .res_shares(tbl_shares),
     .res_is_bid(tbl_is_bid), .res_locate(tbl_locate),
-    .lk_probe1(lk_probe1), .lk_probe2(lk_probe2), .lk_probe_gt2(lk_probe_gt2)
+    .lk_probe1(lk_probe1), .lk_probe2(lk_probe2), .lk_probe_gt2(lk_probe_gt2),
+    .ins_fail_count(tbl_ins_fails)
   );
 
-  // ---- best trackers ------------------------------------------------------
+  // ---- best trackers (level-address space) --------------------------------
   logic                bt_bid_add_en, bt_ask_add_en;
-  logic [PRICE_W-1:0]  bt_bid_add_price, bt_ask_add_price;
+  logic [LEVEL_AW-1:0] bt_bid_add_addr, bt_ask_add_addr;
   logic                bt_bid_empt_en, bt_ask_empt_en;
-  logic [PRICE_W-1:0]  bt_bid_empt_price, bt_ask_empt_price;
+  logic [LEVEL_AW-1:0] bt_bid_empt_addr, bt_ask_empt_addr;
   logic                bt_bid_scanning, bt_ask_scanning;
   logic [LEVEL_AW-1:0] bt_bid_scan_addr, bt_ask_scan_addr;
+  logic [LEVEL_AW-1:0] best_bid_addr, best_ask_addr;
 
   best_tracker #(.IS_BID(1'b1)) u_bid (
     .clk(clk), .rst(rst),
-    .add_en(bt_bid_add_en), .add_price(bt_bid_add_price),
-    .empt_en(bt_bid_empt_en), .empt_price(bt_bid_empt_price),
+    .add_en(bt_bid_add_en), .add_addr(bt_bid_add_addr),
+    .empt_en(bt_bid_empt_en), .empt_addr(bt_bid_empt_addr),
     .side_nonempty(cnt_bid != 0),
     .scan_rd_addr(bt_bid_scan_addr),
-    .scan_rd_shares(bid_mem[bt_bid_scan_addr].total_shares),
+    .scan_rd_shares(bid_shares_mem[bt_bid_scan_addr]),
     .scanning(bt_bid_scanning),
-    .best_valid(best_bid_valid), .best_price(best_bid_price)
+    .best_valid(best_bid_valid), .best_addr(best_bid_addr)
   );
   best_tracker #(.IS_BID(1'b0)) u_ask (
     .clk(clk), .rst(rst),
-    .add_en(bt_ask_add_en), .add_price(bt_ask_add_price),
-    .empt_en(bt_ask_empt_en), .empt_price(bt_ask_empt_price),
+    .add_en(bt_ask_add_en), .add_addr(bt_ask_add_addr),
+    .empt_en(bt_ask_empt_en), .empt_addr(bt_ask_empt_addr),
     .side_nonempty(cnt_ask != 0),
     .scan_rd_addr(bt_ask_scan_addr),
-    .scan_rd_shares(ask_mem[bt_ask_scan_addr].total_shares),
+    .scan_rd_shares(ask_shares_mem[bt_ask_scan_addr]),
     .scanning(bt_ask_scanning),
-    .best_valid(best_ask_valid), .best_price(best_ask_price)
+    .best_valid(best_ask_valid), .best_addr(best_ask_addr)
   );
 
-  assign best_bid_shares = best_bid_valid ? bid_mem[best_bid_price].total_shares : 32'd0;
-  assign best_ask_shares = best_ask_valid ? ask_mem[best_ask_price].total_shares : 32'd0;
-  assign dbg_shares = dbg_is_bid ? bid_mem[dbg_price].total_shares
-                                 : ask_mem[dbg_price].total_shares;
-  assign dbg_count  = dbg_is_bid ? bid_mem[dbg_price].order_count
-                                 : ask_mem[dbg_price].order_count;
+  // reconstruct real prices at the module boundary (base is fixed, so
+  // address order == price order and this is exact)
+  assign best_bid_price  = best_bid_valid ? band_base + PRICE_W'(best_bid_addr) : '0;
+  assign best_ask_price  = best_ask_valid ? band_base + PRICE_W'(best_ask_addr) : '0;
+  assign best_bid_shares = best_bid_valid ? bid_shares_mem[best_bid_addr] : 32'd0;
+  assign best_ask_shares = best_ask_valid ? ask_shares_mem[best_ask_addr] : 32'd0;
+`ifdef SYNTHESIS
+  // testbench-only query port: tied off in synthesis so it doesn't cost every
+  // level SRAM an extra replicated read port
+  assign dbg_shares = '0;
+  assign dbg_count  = '0;
+`else
+  logic [LEVEL_AW-1:0] dbg_addr;
+  assign dbg_addr   = LEVEL_AW'(dbg_price - band_base);
+  assign dbg_shares = dbg_is_bid ? bid_shares_mem[dbg_addr]
+                                 : ask_shares_mem[dbg_addr];
+  assign dbg_count  = dbg_is_bid ? bid_count_mem[dbg_addr]
+                                 : ask_count_mem[dbg_addr];
+`endif
   assign any_scanning = bt_bid_scanning | bt_ask_scanning;
 
   // ---- main FSM -----------------------------------------------------------
@@ -152,6 +192,29 @@ module book_update_engine
   logic [LOCATE_W-1:0] r_locate_q;
   logic                emptied_q;
   logic [SHARES_W-1:0] new_rem_q;
+  // level-SRAM address for the upcoming *_LVL state, registered on the state
+  // transition so the SRAMs see a single read/write address net (one RAM read
+  // port instead of one per price register)
+  logic [LEVEL_AW-1:0] lvl_addr_q;
+
+  // ---- price banding -------------------------------------------------------
+  // base_eff is the band base the incoming Add will see: the current base, or
+  // (first Add with BAND_AUTO_INIT) a fresh base centered on its price. The
+  // first Add is in-window by construction.
+  localparam logic [PRICE_W-1:0] BAND_HALF = PRICE_W'(PRICE_LEVELS / 2);
+  logic               band_valid;
+  logic [PRICE_W-1:0] base_eff;
+  logic [PRICE_W-1:0] add_off, radd_off;
+  logic               add_in_win, radd_in_win;
+
+  assign base_eff = (band_valid || !BAND_AUTO_INIT) ? band_base
+                  : (dec.price > BAND_HALF) ? (dec.price - BAND_HALF) : '0;
+  // out-of-window prices below the base wrap to huge unsigned offsets, so a
+  // single compare covers both sides of the window
+  assign add_off     = dec.price - base_eff;
+  assign add_in_win  = add_off < PRICE_W'(PRICE_LEVELS);
+  assign radd_off    = dec_price_q - band_base;    // replace-add new price
+  assign radd_in_win = radd_off < PRICE_W'(PRICE_LEVELS);
   logic                tbl_req_q;       // one outstanding table request guard
   logic                expect_scan_q;   // a best-level scan was triggered this msg
   logic                scan_seen_q;     // tracker scan has been observed active
@@ -185,6 +248,12 @@ module book_update_engine
       tbl_req_q     <= 1'b0;
       expect_scan_q <= 1'b0;
       scan_seen_q   <= 1'b0;
+      band_valid    <= 1'b0;
+      band_base     <= '0;
+      band_drops    <= '0;
+    end else if (band_cfg_valid) begin
+      band_base  <= band_cfg_base;
+      band_valid <= 1'b1;
     end else begin
       // default deassertions (one-cycle pulses)
       engine_done   <= 1'b0;
@@ -209,7 +278,14 @@ module book_update_engine
               op_side_q   <= dec.is_bid;
               op_price_q  <= dec.price;
               op_shares_q <= dec.shares;
-              state       <= S_ADD_TBL;
+              if (add_in_win) begin
+                band_base  <= base_eff;
+                band_valid <= 1'b1;
+                state      <= S_ADD_TBL;
+              end else begin
+                band_drops <= band_drops + 1'b1;  // out-of-band: drop whole
+                state      <= S_FINISH;
+              end
             end
             T_EXEC, T_EXEC_PR, T_CANCEL, T_DELETE: state <= S_LK;
             T_REPLACE: begin is_replace_q <= 1'b1; state <= S_LK; end
@@ -235,23 +311,24 @@ module book_update_engine
             tbl_cmd_locate <= op_locate_q;
             tbl_req_q      <= 1'b1;
           end else if (tbl_done) begin
-            tbl_req_q <= 1'b0;
-            state     <= S_ADD_LVL;
+            tbl_req_q  <= 1'b0;
+            lvl_addr_q <= LEVEL_AW'(op_price_q - band_base);
+            state      <= S_ADD_LVL;
           end
         end
         S_ADD_LVL: begin
           if (op_side_q) begin
-            bid_mem[op_price_q].total_shares <= bid_mem[op_price_q].total_shares + op_shares_q;
-            bid_mem[op_price_q].order_count  <= bid_mem[op_price_q].order_count + 1'b1;
+            bid_shares_mem[lvl_addr_q] <= bid_shares_mem[lvl_addr_q] + op_shares_q;
+            bid_count_mem[lvl_addr_q]  <= bid_count_mem[lvl_addr_q] + 1'b1;
             cnt_bid       <= cnt_bid + 1'b1;
             tot_bid_vol   <= tot_bid_vol + 64'(op_shares_q);
-            bt_bid_add_en <= 1'b1; bt_bid_add_price <= op_price_q;
+            bt_bid_add_en <= 1'b1; bt_bid_add_addr <= lvl_addr_q;
           end else begin
-            ask_mem[op_price_q].total_shares <= ask_mem[op_price_q].total_shares + op_shares_q;
-            ask_mem[op_price_q].order_count  <= ask_mem[op_price_q].order_count + 1'b1;
+            ask_shares_mem[lvl_addr_q] <= ask_shares_mem[lvl_addr_q] + op_shares_q;
+            ask_count_mem[lvl_addr_q]  <= ask_count_mem[lvl_addr_q] + 1'b1;
             cnt_ask       <= cnt_ask + 1'b1;
             tot_ask_vol   <= tot_ask_vol + 64'(op_shares_q);
-            bt_ask_add_en <= 1'b1; bt_ask_add_price <= op_price_q;
+            bt_ask_add_en <= 1'b1; bt_ask_add_addr <= lvl_addr_q;
           end
           state <= S_FINISH;
         end
@@ -272,6 +349,7 @@ module book_update_engine
               r_price_q  <= tbl_price;
               r_rem_q    <= tbl_shares;
               r_locate_q <= tbl_locate;
+              lvl_addr_q <= LEVEL_AW'(tbl_price - band_base);
               state      <= S_MOD_LVL;
             end
           end
@@ -285,15 +363,15 @@ module book_update_engine
           else                                     amt = min_u(dec_shares_q, r_rem_q);
           nrem = r_rem_q - amt;
           if (r_side_q) begin
-            newtot = bid_mem[r_price_q].total_shares - amt;
-            bid_mem[r_price_q].total_shares <= newtot;
-            if (nrem == 0) bid_mem[r_price_q].order_count <= bid_mem[r_price_q].order_count - 1'b1;
+            newtot = bid_shares_mem[lvl_addr_q] - amt;
+            bid_shares_mem[lvl_addr_q] <= newtot;
+            if (nrem == 0) bid_count_mem[lvl_addr_q] <= bid_count_mem[lvl_addr_q] - 1'b1;
             tot_bid_vol <= tot_bid_vol - 64'(amt);
             if (nrem == 0) cnt_bid <= cnt_bid - 1'b1;
           end else begin
-            newtot = ask_mem[r_price_q].total_shares - amt;
-            ask_mem[r_price_q].total_shares <= newtot;
-            if (nrem == 0) ask_mem[r_price_q].order_count <= ask_mem[r_price_q].order_count - 1'b1;
+            newtot = ask_shares_mem[lvl_addr_q] - amt;
+            ask_shares_mem[lvl_addr_q] <= newtot;
+            if (nrem == 0) ask_count_mem[lvl_addr_q] <= ask_count_mem[lvl_addr_q] - 1'b1;
             tot_ask_vol <= tot_ask_vol - 64'(amt);
             if (nrem == 0) cnt_ask <= cnt_ask - 1'b1;
           end
@@ -337,12 +415,12 @@ module book_update_engine
           scan_seen_q   <= 1'b0;
           if (emptied_q) begin
             if (r_side_q) begin
-              bt_bid_empt_en <= 1'b1; bt_bid_empt_price <= r_price_q;
-              if (best_bid_valid && r_price_q == best_bid_price && cnt_bid != 0)
+              bt_bid_empt_en <= 1'b1; bt_bid_empt_addr <= lvl_addr_q;
+              if (best_bid_valid && lvl_addr_q == best_bid_addr && cnt_bid != 0)
                 expect_scan_q <= 1'b1;
             end else begin
-              bt_ask_empt_en <= 1'b1; bt_ask_empt_price <= r_price_q;
-              if (best_ask_valid && r_price_q == best_ask_price && cnt_ask != 0)
+              bt_ask_empt_en <= 1'b1; bt_ask_empt_addr <= lvl_addr_q;
+              if (best_ask_valid && lvl_addr_q == best_ask_addr && cnt_ask != 0)
                 expect_scan_q <= 1'b1;
             end
           end
@@ -353,11 +431,18 @@ module book_update_engine
           // we cannot simply test !scanning here (it would pass before the scan
           // even starts). Instead: if no scan is expected, proceed; otherwise
           // wait until we have seen scanning go active and then return to idle.
+          // A replace whose new price falls outside the band drops the re-add
+          // (the remove above already applied; the new ref never exists, so
+          // later ops on it are unknown-ref no-ops — stream-safe).
           if (any_scanning) scan_seen_q <= 1'b1;
-          if (!expect_scan_q) begin
-            state <= is_replace_q ? S_RADD_TBL : S_FINISH;
-          end else if (scan_seen_q && !any_scanning) begin
-            state <= is_replace_q ? S_RADD_TBL : S_FINISH;
+          if (!expect_scan_q || (scan_seen_q && !any_scanning)) begin
+            if (is_replace_q && radd_in_win) begin
+              state <= S_RADD_TBL;
+            end else begin
+              if (is_replace_q && !radd_in_win)
+                band_drops <= band_drops + 1'b1;
+              state <= S_FINISH;
+            end
           end
         end
 
@@ -373,23 +458,24 @@ module book_update_engine
             tbl_cmd_locate <= r_locate_q;
             tbl_req_q      <= 1'b1;
           end else if (tbl_done) begin
-            tbl_req_q <= 1'b0;
-            state     <= S_RADD_LVL;
+            tbl_req_q  <= 1'b0;
+            lvl_addr_q <= LEVEL_AW'(radd_off);
+            state      <= S_RADD_LVL;
           end
         end
         S_RADD_LVL: begin
           if (r_side_q) begin
-            bid_mem[dec_price_q].total_shares <= bid_mem[dec_price_q].total_shares + dec_shares_q;
-            bid_mem[dec_price_q].order_count  <= bid_mem[dec_price_q].order_count + 1'b1;
+            bid_shares_mem[lvl_addr_q] <= bid_shares_mem[lvl_addr_q] + dec_shares_q;
+            bid_count_mem[lvl_addr_q]  <= bid_count_mem[lvl_addr_q] + 1'b1;
             cnt_bid       <= cnt_bid + 1'b1;
             tot_bid_vol   <= tot_bid_vol + 64'(dec_shares_q);
-            bt_bid_add_en <= 1'b1; bt_bid_add_price <= dec_price_q;
+            bt_bid_add_en <= 1'b1; bt_bid_add_addr <= lvl_addr_q;
           end else begin
-            ask_mem[dec_price_q].total_shares <= ask_mem[dec_price_q].total_shares + dec_shares_q;
-            ask_mem[dec_price_q].order_count  <= ask_mem[dec_price_q].order_count + 1'b1;
+            ask_shares_mem[lvl_addr_q] <= ask_shares_mem[lvl_addr_q] + dec_shares_q;
+            ask_count_mem[lvl_addr_q]  <= ask_count_mem[lvl_addr_q] + 1'b1;
             cnt_ask       <= cnt_ask + 1'b1;
             tot_ask_vol   <= tot_ask_vol + 64'(dec_shares_q);
-            bt_ask_add_en <= 1'b1; bt_ask_add_price <= dec_price_q;
+            bt_ask_add_en <= 1'b1; bt_ask_add_addr <= lvl_addr_q;
           end
           state <= S_FINISH;
         end

@@ -106,11 +106,14 @@ def order_executed_price(locate: int, tracking: int, timestamp_ns: int,
                          match_number: int, printable: bool,
                          price: int) -> bytes:
     """Order Executed with Price ('C') — body 38 bytes."""
+    # NB: the ternary MUST be parenthesized — without parens Python groups the
+    # whole preceding concatenation into the true-branch (found the hard way
+    # when real NASDAQ data delivered the first 'C' message through here).
     body = (_header('C', locate, tracking, timestamp_ns) +
             _u64be(order_ref) +
             _u32be(exec_shares) +
             _u64be(match_number) +
-            b'Y' if printable else b'N' +
+            (b'Y' if printable else b'N') +
             _u32be(price))
     assert len(body) == 38
     return _frame(body)

@@ -16,6 +16,7 @@ module orderbook_top
   input  logic                clk,
   input  logic                rst,
   input  logic                raw_mode,   // 1 = input is raw ITCH (no UDP wrapper)
+  input  logic                mold_mode,  // 1 = UDP payload is MoldUDP64 (raw_mode=0 only)
 
   input  logic [WORD_W-1:0]   in_data,
   input  logic [NBYTES_W-1:0] in_nbytes,
@@ -32,6 +33,20 @@ module orderbook_top
   output logic [31:0]         best_ask_shares,
   output logic [63:0]         tot_bid_vol,
   output logic [63:0]         tot_ask_vol,
+
+  // price-band config (pulse before streaming; see book_update_engine)
+  input  logic                band_cfg_valid,
+  input  logic [PRICE_W-1:0]  band_cfg_base,
+
+  // price-band telemetry (base auto-set by the first Add; out-of-window drops)
+  output logic [PRICE_W-1:0]  band_base,
+  output logic [31:0]         band_drops,
+
+  // MoldUDP64 telemetry (gap DETECTION only; no retransmit request path)
+  output logic [63:0]         mold_next_seq,
+  output logic [31:0]         mold_gap_events,
+  output logic [63:0]         mold_gap_msgs,
+  output logic                mold_session_end,
 
   input  logic                dbg_is_bid,
   input  logic [PRICE_W-1:0]  dbg_price,
@@ -65,6 +80,7 @@ module orderbook_top
   output logic [63:0]         hash_probe_1,
   output logic [63:0]         hash_probe_2,
   output logic [63:0]         hash_probe_gt2,
+  output logic [31:0]         tbl_ins_fails,  // nonzero = table undersized for churn
   output logic [63:0]         pipeline_stall_cycles,
   output logic [63:0]         ingest_stall_cycles,
   output logic [63:0]         cycle_count,
@@ -84,7 +100,11 @@ module orderbook_top
   // stripper -> framer
   logic [WORD_W-1:0]   strip_data;
   logic [NBYTES_W-1:0] strip_nbytes;
-  logic                strip_valid, strip_ready;
+  logic                strip_valid, strip_ready, strip_sop;
+  // mold_stripper -> framer (mold-decapped beats; bypass when mold_mode=0)
+  logic [WORD_W-1:0]   mold_data;
+  logic [NBYTES_W-1:0] mold_nbytes;
+  logic                mold_valid, mold_ready;
   // framer -> decoder (body-aligned beats)
   logic [WORD_W-1:0]   f_data;
   logic [NBYTES_W-1:0] f_nbytes;
@@ -124,13 +144,23 @@ module orderbook_top
     .in_data(in_data), .in_nbytes(in_nbytes), .in_valid(in_valid),
     .in_sop(in_sop), .in_ready(in_ready),
     .out_data(strip_data), .out_nbytes(strip_nbytes),
-    .out_valid(strip_valid), .out_ready(strip_ready)
+    .out_valid(strip_valid), .out_sop(strip_sop), .out_ready(strip_ready)
+  );
+
+  mold_stripper u_mold (
+    .clk(clk), .rst(rst), .mold_mode(mold_mode && !raw_mode),
+    .in_data(strip_data), .in_nbytes(strip_nbytes),
+    .in_valid(strip_valid), .in_sop(strip_sop), .in_ready(strip_ready),
+    .out_data(mold_data), .out_nbytes(mold_nbytes),
+    .out_valid(mold_valid), .out_ready(mold_ready),
+    .mold_next_seq(mold_next_seq), .mold_gap_events(mold_gap_events),
+    .mold_gap_msgs(mold_gap_msgs), .mold_session_end(mold_session_end)
   );
 
   itch_framer u_fr (
     .clk(clk), .rst(rst),
-    .in_data(strip_data), .in_nbytes(strip_nbytes),
-    .in_valid(strip_valid), .in_ready(strip_ready),
+    .in_data(mold_data), .in_nbytes(mold_nbytes),
+    .in_valid(mold_valid), .in_ready(mold_ready),
     .msg_data(f_data), .msg_nbytes(f_nbytes), .msg_beat_valid(f_beat_valid),
     .msg_widx(f_widx), .msg_start(f_start), .msg_complete(f_complete),
     .msg_len(f_len),
@@ -153,12 +183,15 @@ module orderbook_top
     .best_ask_valid(best_ask_valid), .best_ask_price(best_ask_price),
     .best_ask_shares(best_ask_shares),
     .tot_bid_vol(tot_bid_vol), .tot_ask_vol(tot_ask_vol),
+    .band_cfg_valid(band_cfg_valid), .band_cfg_base(band_cfg_base),
+    .band_base(band_base), .band_drops(band_drops),
     .dbg_is_bid(dbg_is_bid), .dbg_price(dbg_price),
     .dbg_shares(dbg_shares), .dbg_count(dbg_count),
     .trade_valid(trade_valid), .trade_price(trade_price), .trade_shares(trade_shares),
     .ev_done(ev_done), .ev_type(ev_type),
     .any_scanning(any_scanning), .in_replace(in_replace),
-    .lk_probe1(lk_p1), .lk_probe2(lk_p2), .lk_probe_gt2(lk_pg2)
+    .lk_probe1(lk_p1), .lk_probe2(lk_p2), .lk_probe_gt2(lk_pg2),
+    .tbl_ins_fails(tbl_ins_fails)
   );
 
   stats_engine u_stats (

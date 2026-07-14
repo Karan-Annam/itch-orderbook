@@ -34,12 +34,26 @@ module order_ref_table
   // probe-depth telemetry (pulses, qualified by a completed LOOKUP)
   output logic                 lk_probe1,
   output logic                 lk_probe2,
-  output logic                 lk_probe_gt2
+  output logic                 lk_probe_gt2,
+
+  // inserts abandoned after MAX_PROBE full slots — a nonzero value means the
+  // table is undersized for the stream's churn and the book is diverging
+  output logic [31:0]          ins_fail_count
 );
 
-  order_entry_t mem [TABLE_SIZE];
+  // Stored as plain bit vectors, not order_entry_t[]: Vivado (2022.2) stalls
+  // for hours trying to infer RAM from struct-typed arrays (Synth 8-11357).
+  // Entries are cast to/from order_entry_t at the read/write boundaries.
+  localparam int ENTRY_W = $bits(order_entry_t);
+  logic [ENTRY_W-1:0] mem [TABLE_SIZE];
 
-  typedef enum logic [1:0] {S_IDLE, S_PROBE, S_DONE} state_t;
+  // S_HASH/S_HOME give the Fibonacci multiply its own reg-to-reg cycle into a
+  // DEDICATED hash_q register. idx_q alone is not a pipeline stage: Vivado
+  // absorbs it into the BRAM address port register, which puts the DSP back
+  // in front of the BRAM — hashing combinationally into that port cost
+  // 6.6 ns of logic on the routed critical path. The busy/done handshake
+  // hides the two extra cycles from the engine.
+  typedef enum logic [2:0] {S_IDLE, S_HASH, S_HOME, S_PROBE, S_DONE} state_t;
   state_t                 state;
   logic [1:0]             op_q;
   logic [REF_W-1:0]       ref_q;
@@ -48,6 +62,7 @@ module order_ref_table
   logic                   is_bid_q;
   logic [LOCATE_W-1:0]    locate_q;
   logic [HASH_W-1:0]      idx_q;
+  logic [HASH_W-1:0]      hash_q;      // pipelined hash result (see S_HASH)
   logic [31:0]            probes_q;
   // first tombstone seen on an INSERT probe — reused so deleted slots don't make
   // chains grow without bound.
@@ -55,7 +70,16 @@ module order_ref_table
   logic [HASH_W-1:0]      tomb_idx_q;
 
   order_entry_t cur;
-  assign cur = mem[idx_q];   // async read
+  assign cur = order_entry_t'(mem[idx_q]);   // async read
+
+  // the entry every INSERT writes (same payload at all three write sites)
+  order_entry_t ins_entry;
+  assign ins_entry = '{valid:1'b1, tomb:1'b0, is_bid:is_bid_q, locate:locate_q,
+                       shares:shares_q, price:price_q, oref:ref_q};
+  // DELETE leaves this tombstone so probe chains stay intact
+  order_entry_t tomb_entry;
+  assign tomb_entry = '{valid:1'b0, tomb:1'b1, is_bid:1'b0, locate:'0,
+                        shares:'0, price:'0, oref:'0};
 
   assign busy = (state != S_IDLE);
 
@@ -66,12 +90,13 @@ module order_ref_table
 
   always_ff @(posedge clk) begin
     if (rst) begin
-      state        <= S_IDLE;
-      done         <= 1'b0;
-      res_found    <= 1'b0;
-      lk_probe1    <= 1'b0;
-      lk_probe2    <= 1'b0;
-      lk_probe_gt2 <= 1'b0;
+      state          <= S_IDLE;
+      done           <= 1'b0;
+      res_found      <= 1'b0;
+      lk_probe1      <= 1'b0;
+      lk_probe2      <= 1'b0;
+      lk_probe_gt2   <= 1'b0;
+      ins_fail_count <= '0;
     end else begin
       done         <= 1'b0;
       lk_probe1    <= 1'b0;
@@ -86,7 +111,16 @@ module order_ref_table
           shares_q    <= cmd_shares;
           is_bid_q    <= cmd_is_bid;
           locate_q    <= cmd_locate;
-          idx_q       <= hash_ref(cmd_ref);
+          state       <= S_HASH;
+        end
+
+        S_HASH: begin                    // registered ref -> DSP -> hash_q
+          hash_q <= hash_ref(ref_q);
+          state  <= S_HOME;
+        end
+
+        S_HOME: begin                    // hash_q -> BRAM address register
+          idx_q       <= hash_q;
           probes_q    <= 1;
           have_tomb_q <= 1'b0;
           state       <= S_PROBE;
@@ -96,18 +130,15 @@ module order_ref_table
           if (op_q == OP_INSERT) begin
             if (cur.valid && cur.oref == ref_q) begin
               // key already present: update in place
-              mem[idx_q] <= '{valid:1'b1, tomb:1'b0, is_bid:is_bid_q, locate:locate_q,
-                              shares:shares_q, price:price_q, oref:ref_q};
+              mem[idx_q] <= ins_entry;
               res_found  <= 1'b1;
               state      <= S_DONE;
             end else if (!cur.valid && !cur.tomb) begin
               // true empty: insert here, or at the first tombstone we passed
               if (have_tomb_q)
-                mem[tomb_idx_q] <= '{valid:1'b1, tomb:1'b0, is_bid:is_bid_q, locate:locate_q,
-                                     shares:shares_q, price:price_q, oref:ref_q};
+                mem[tomb_idx_q] <= ins_entry;
               else
-                mem[idx_q]      <= '{valid:1'b1, tomb:1'b0, is_bid:is_bid_q, locate:locate_q,
-                                     shares:shares_q, price:price_q, oref:ref_q};
+                mem[idx_q]      <= ins_entry;
               res_found <= 1'b1;
               state     <= S_DONE;
             end else begin
@@ -118,7 +149,20 @@ module order_ref_table
               end
               idx_q    <= idx_q + 1'b1;
               probes_q <= probes_q + 1'b1;
-              if (probes_q >= MAX_PROBE) state <= S_DONE; // table full (shouldn't happen)
+              if (probes_q >= MAX_PROBE) begin
+                // Probe budget exhausted without a TRUE empty — the normal
+                // state once churn has tombstoned every slot. The key cannot
+                // exist beyond MAX_PROBE (lookups stop there too), so a
+                // remembered tombstone is a safe home; only a tomb-free full
+                // window is a genuine failure.
+                if (have_tomb_q) begin
+                  mem[tomb_idx_q] <= ins_entry;
+                  res_found       <= 1'b1;
+                end else begin
+                  ins_fail_count <= ins_fail_count + 1'b1;
+                end
+                state <= S_DONE;
+              end
             end
           end else begin // LOOKUP or DELETE
             if (cur.valid && cur.oref == ref_q) begin
@@ -130,8 +174,7 @@ module order_ref_table
               // DELETE leaves a tombstone so colliding keys further along the
               // chain remain reachable (do NOT clear to all-zero / empty).
               if (op_q == OP_DELETE)
-                mem[idx_q] <= '{valid:1'b0, tomb:1'b1, is_bid:1'b0, locate:'0,
-                                shares:'0, price:'0, oref:'0};
+                mem[idx_q] <= tomb_entry;
               if (op_q == OP_LOOKUP) begin
                 lk_probe1    <= (probes_q == 1);
                 lk_probe2    <= (probes_q == 2);

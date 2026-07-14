@@ -1,0 +1,143 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved.
+--------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2022.2 (win64) Build 3671981 Fri Oct 14 05:00:03 MDT 2022
+| Date         : Tue Jul 14 00:32:12 2026
+| Host         : Karan-Laptop running 64-bit major release  (build 9200)
+| Command      : report_ram_utilization -file C:/nmc_cxl_project/orderbook_project/fpga/reports/ram_utilization.rpt
+| Design       : orderbook_top
+| Device       : xc7s50csga324-1
+| Speed File   : -1
+--------------------------------------------------------------------------------------------------------------------
+
+RAM Usage Information
+
+Table of Contents
+-----------------
+1. Summary
+2. Memory Description
+3. Memory Utilization - Inferred
+4. Memory Performance - Inferred
+5. Block Ram / URAM Memory Power - Inferred
+
+1. Summary
+----------
+
++--------------------------+------------+-----------+-------+-----------+
+| Memory Type              | Total Used | Available | Util% | Inferred% |
++--------------------------+------------+-----------+-------+-----------+
+| BlockRAM                 |       15.5 |        75 | 20.67 |    100.00 |
+|  RAMB36E1                |         15 |           |       |    100.00 |
+|  RAMB18E1                |          1 |           |       |    100.00 |
+| LUTMs as Distributed RAM |       3456 |      9600 | 36.00 |    100.00 |
+|  LUTMs as RAM64M         |       1408 |           |       |    100.00 |
+|  LUTMs as RAM128X1D      |       2048 |           |       |    100.00 |
++--------------------------+------------+-----------+-------+-----------+
+*  Each RAMB18 is calculated as 0.5 BlockRAM
+**  Tables 2, 3, 4 and 5 cover RAMs inferred by Vivado Synthesis using XPMs or RTL inference
+***  XRAMs are not reported for detailed tables
+
+
+2. Memory Description
+---------------------
+
++-------------------------+------------+-------------+------------------------+------------------------+
+| Memory Name             | Array Size | Memory Type | Port 1 Dimension / Map | Port 2 Dimension / Map |
++-------------------------+------------+-------------+------------------------+------------------------+
+| u_eng/u_tbl/mem         |     602112 | RAM_SDP     | 4096x147               | 4096x147               |
+|  u_eng/u_tbl/mem_reg_0  |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_1  |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_2  |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_3  |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_4  |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_5  |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_6  |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_7  |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_8  |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_9  |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_10 |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_11 |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_12 |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_13 |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_14 |      36864 |             |  A:A:4096x9            |  B:B:4096x9            |
+|  u_eng/u_tbl/mem_reg_16 |      12288 |             |  A:A:4096x3            |  B:B:4096x3            |
++-------------------------+------------+-------------+------------------------+------------------------+
+
+
+3. Memory Utilization - Inferred
+--------------------------------
+
++-------------------------+-----------+----------------+-----------+-----------+---------+---------------+---------------+---------+---------------+---------------+---------+---------------+---------------+---------+---------------+---------------+
+| Memory Name             | Primitive | Available Bits | Used Bits | Bit Util% | A Depth | A Depth Avail | A Depth Util% | A Width | A Width Avail | A Width Util% | B Depth | B Depth Avail | B Depth Util% | B Width | B Width Avail | B Width Util% |
++-------------------------+-----------+----------------+-----------+-----------+---------+---------------+---------------+---------+---------------+---------------+---------+---------------+---------------+---------+---------------+---------------+
+| u_eng/u_tbl/mem         |           |                |           |           |         |               |               |         |               |               |         |               |               |         |               |               |
+|  u_eng/u_tbl/mem_reg_0  | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_1  | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_2  | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_3  | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_4  | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_5  | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_6  | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_7  | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_8  | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_9  | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_10 | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_11 | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_12 | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_13 | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_14 | RAMB36E1  |          36864 |     36864 |    100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |    4096 |          4096 |        100.00 |       9 |             9 |        100.00 |
+|  u_eng/u_tbl/mem_reg_16 | RAMB18E1  |          18432 |     12288 |     66.67 |    4096 |          4096 |        100.00 |       3 |             4 |         75.00 |    4096 |          4096 |        100.00 |       3 |             4 |         75.00 |
++-------------------------+-----------+----------------+-----------+-----------+---------+---------------+---------------+---------+---------------+---------------+---------+---------------+---------------+---------+---------------+---------------+
+
+
+4. Memory Performance - Inferred
+--------------------------------
+
++-------------------------+-----------+------------------------+------------------------+-------------+-------------------------+-------------+-------------------------+-----------+--------+--------+---------+-----------+--------+--------+---------+
+| Memory Name             | Primitive | Port 1 Dimension / Map | Port 2 Dimension / Map | Port A Type | Port A Requirement (ns) | Port B Type | Port B Requirement (ns) | A Cascade | IREG_A | OREG_A | DOA_REG | B Cascade | IREG_B | OREG_B | DOB_REG |
++-------------------------+-----------+------------------------+------------------------+-------------+-------------------------+-------------+-------------------------+-----------+--------+--------+---------+-----------+--------+--------+---------+
+| u_eng/u_tbl/mem         |           | 4096x147               | 4096x147               |             |                         |             |                         |           |        |        |         |           |        |        |         |
+|  u_eng/u_tbl/mem_reg_0  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_1  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_2  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_3  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_4  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_5  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_6  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_7  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_8  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_9  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_10 | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_11 | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_12 | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_13 | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_14 | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
+|  u_eng/u_tbl/mem_reg_16 | RAMB18E1  |  A:A:4096x3            |  B:B:4096x3            |       Write |                    10.0 |        Read |                    10.0 |           |        |        |       0 |           |        |        |       0 |
++-------------------------+-----------+------------------------+------------------------+-------------+-------------------------+-------------+-------------------------+-----------+--------+--------+---------+-----------+--------+--------+---------+
+
+
+5. Block Ram / URAM Memory Power - Inferred
+-------------------------------------------
+
++-------------------------+-----------+------------------------+------------------------+--------------------+---------------+-------------------+-----------+--------------------+---------------+-------------------+-----------+
+| Memory Name             | Primitive | Port 1 Dimension / Map | Port 2 Dimension / Map | Port A Power Gated | Port A Enable | Port A WRITE_MODE | A Cascade | Port B Power Gated | Port B Enable | Port B WRITE_MODE | B Cascade |
++-------------------------+-----------+------------------------+------------------------+--------------------+---------------+-------------------+-----------+--------------------+---------------+-------------------+-----------+
+| u_eng/u_tbl/mem         |           | 4096x147               | 4096x147               |                    |               |                   |           |                    |               |                   |           |
+|  u_eng/u_tbl/mem_reg_0  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_1  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_2  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_3  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_4  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_5  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_6  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_7  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_8  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_9  | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_10 | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_11 | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_12 | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_13 | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_14 | RAMB36E1  |  A:A:4096x9            |  B:B:4096x9            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
+|  u_eng/u_tbl/mem_reg_16 | RAMB18E1  |  A:A:4096x3            |  B:B:4096x3            |                    |        SIGNAL |        READ_FIRST |           |                    |         POWER |       WRITE_FIRST |           |
++-------------------------+-----------+------------------------+------------------------+--------------------+---------------+-------------------+-----------+--------------------+---------------+-------------------+-----------+
+
+

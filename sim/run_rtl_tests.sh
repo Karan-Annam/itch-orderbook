@@ -21,9 +21,9 @@ OBJ="$ROOT/sim/obj_rtl"
 CXX=g++
 CXXFLAGS="-std=c++17 -O2 -I$VINC -I$VINC/vltstd -I$ROOT/sim -I$OBJ -DVM_TRACE=0"
 
-RTL="rtl/ob_pkg.sv rtl/udp_stripper.sv rtl/itch_framer.sv rtl/itch_decoder.sv \
-     rtl/order_ref_table.sv rtl/book_update_engine.sv rtl/best_tracker.sv \
-     rtl/stats_engine.sv rtl/perf_counters.sv rtl/orderbook_top.sv"
+RTL="rtl/ob_pkg.sv rtl/udp_stripper.sv rtl/mold_stripper.sv rtl/itch_framer.sv \
+     rtl/itch_decoder.sv rtl/order_ref_table.sv rtl/book_update_engine.sv \
+     rtl/best_tracker.sv rtl/stats_engine.sv rtl/perf_counters.sv rtl/orderbook_top.sv"
 
 echo "==== ensuring sample data ===="
 if [ ! -f sim/rtl_sim.itch ]; then
@@ -74,10 +74,43 @@ build_run() {  # <name> <src> [args...]
     fi
 }
 
+# Second model: the SYNTHESIS config (banded 1024-level book, small table,
+# dbg tied off) — the exact configuration Vivado sees. test_banding runs
+# against this one; everything else uses the full-size sim config above.
+OBJB="$ROOT/sim/obj_rtl_band"
+echo "==== Verilating orderbook_top (SYNTHESIS/banded config) ===="
+rm -rf "$OBJB"
+$VBIN --cc -j 0 \
+    -Wall -Wno-UNUSED -Wno-UNDRIVEN -Wno-DECLFILENAME -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+    +define+SYNTHESIS -Irtl --top-module orderbook_top --Mdir "$OBJB" $RTL >> "$LOG" 2>&1
+if [ $? -ne 0 ]; then echo "  [FAIL] Verilation (banded)"; tail -30 "$LOG"; exit 1; fi
+make -C "$OBJB" -f Vorderbook_top.mk Vorderbook_top__ALL.a >> "$LOG" 2>&1
+if [ ! -f "$OBJB/Vorderbook_top__ALL.a" ]; then
+    echo "  [FAIL] banded library build"; tail -30 "$LOG"; exit 1; fi
+CXXFLAGS_B="-std=c++17 -O2 -I$VINC -I$VINC/vltstd -I$ROOT/sim -I$OBJB -DVM_TRACE=0"
+SUPPORT_B="$OBJ/itch_file_reader.o $OBJ/reference_model.o $OBJ/sim_support.o \
+           $OBJB/Vorderbook_top__ALL.a $OBJ/verilated.o $OBJ/verilated_threads.o"
+echo "  banded library built"
+
+build_run_band() {  # <name> <src> [args...]
+    local name="$1"; local src="$2"; shift 2
+    local exe="$OBJB/$name.exe"
+    if ! $CXX $CXXFLAGS_B "$src" $SUPPORT_B $LIBS -o "$exe" 2> "$OBJB/$name.build.log"; then
+        echo "  [FAIL] compile $name"; tail -20 "$OBJB/$name.build.log"; return 1; fi
+    if "$exe" "$@" > "$OBJB/$name.run.log" 2>&1; then
+        echo "  [PASS] $name  ($(grep -hoE '[0-9]+ checks' "$OBJB/$name.run.log" | head -1))"
+        return 0
+    else
+        echo "  [FAIL] $name"; tail -25 "$OBJB/$name.run.log"; return 1
+    fi
+}
+
 echo "==== running RTL tests ===="
 fail=0
+build_run_band test_banding   sim/tests/test_banding.cpp                       || fail=1
 build_run test_itch_decode     sim/tests/test_itch_decode.cpp                 || fail=1
 build_run test_udp_strip       sim/tests/test_udp_strip.cpp                   || fail=1
+build_run test_mold            sim/tests/test_mold.cpp                        || fail=1
 build_run test_framer_wide     sim/tests/test_framer_wide.cpp                 || fail=1
 build_run test_order_ref_table sim/tests/test_order_ref_table.cpp             || fail=1
 build_run test_book_update     sim/tests/test_book_update.cpp                 || fail=1
