@@ -1,103 +1,67 @@
 #!/usr/bin/env bash
-# One-shot build + test entry point.
-#
-# Handles the two MSYS2 gotchas (docs/BUILDING.md): puts the ucrt64 bin dir
-# first on PATH and points Verilator at its share dir / real binary. Builds the
-# software stack, runs the software test suite, the book benchmark, the RTL
-# Verilator tests, drives the software binary to emit CSVs, and runs the
-# analysis scripts. Exits 0 only if every stage passes.
-#
-# Env knobs:
-#   SKIP_RTL=1       skip the Verilator RTL tests (software-only iteration)
-#   SKIP_ANALYSIS=1  skip the Python analysis stage
-set -u
+# Rebuild data, run all software/RTL/board tests, collect measurements, and
+# regenerate the checked-in result summary. Run from MSYS2 or Git Bash.
+set -euo pipefail
 
-# Capture the pre-MSYS PATH: the matplotlib-capable Windows Python lives here,
-# whereas the ucrt64 python we prepend below has no matplotlib.
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT"
+
 ORIG_PATH="$PATH"
-export PATH="/c/msys64/ucrt64/bin:$PATH"
-export VERILATOR_ROOT="C:/msys64/ucrt64/share/verilator"
-
-# Pick a python that can import matplotlib (for plots); fall back to any python
-# (the analysis scripts then emit CSV summaries only).
-pick_python() {
-    local user_dir="/c/Users/${USERNAME:-${USER:-$(whoami 2>/dev/null)}}/AppData/Local/Microsoft/WindowsApps/python"
-    for p in python python3 "$user_dir" \
-             "${LOCALAPPDATA:-}/Microsoft/WindowsApps/python"; do
-        if PATH="$ORIG_PATH" "$p" -c "import matplotlib" >/dev/null 2>&1; then
-            echo "$p"; return; fi
-    done
-    echo python
-}
-
-cd "$(dirname "$0")" || exit 2
-mkdir -p build build/csv
-
-CXX=g++
-CXXFLAGS="-std=c++17 -O3 -march=native -falign-functions=64 -falign-loops=64 -Wall -Wextra -pthread"
-LIB="sw/parser/itch_parser.cpp sw/book/order_ref_table.cpp sw/book/order_book.cpp sw/stats/stats_engine.cpp"
-
-fail=0
-step() { echo; echo "==== $* ===="; }
-ok()   { echo "  [OK]  $*"; }
-bad()  { echo "  [FAIL] $*"; fail=1; }
-
-# 1. generator + sample data ------------------------------------------------
-step "build generator + sample data"
-$CXX -std=c++17 -O2 -Wall -Wextra tools/gen_itch.cpp -o build/gen_itch.exe \
-    && ./build/gen_itch.exe data/sample.itch 200000 4 >/dev/null \
-    && ok "data/sample.itch" || bad "generator"
-
-# 2. software test suite ----------------------------------------------------
-step "software test suite"
-TESTS="sw/tests/test_main.cpp sw/tests/test_util.cpp sw/tests/test_order_ref_table.cpp \
-       sw/tests/test_itch_parser.cpp sw/tests/test_book_engine.cpp sw/tests/test_stats.cpp \
-       sw/tests/test_full_pipeline.cpp"
-if $CXX $CXXFLAGS $TESTS $LIB -o build/run_tests.exe; then
-    if ./build/run_tests.exe; then ok "software tests"; else bad "software tests"; fi
-else bad "software tests (compile)"; fi
-
-# 3. software order book binary + CSVs --------------------------------------
-step "software order book binary"
-if $CXX $CXXFLAGS sw/main.cpp $LIB sw/receiver/afxdp_receiver.cpp -o build/orderbook_sw.exe; then
-    ./build/orderbook_sw.exe data/sample.itch --symbol 1 --csv build/csv --quiet \
-        && ok "orderbook_sw + CSVs" || bad "orderbook_sw run"
-else bad "orderbook_sw (compile)"; fi
-
-# 4. book benchmark -----------------------------------------------------------
-step "book benchmark (std::map vs SIMD)"
-if $CXX $CXXFLAGS tools/bench.cpp $LIB -o build/bench.exe; then
-    ./build/bench.exe 500000 | tee build/csv/benchmark.txt && ok "benchmark" || bad "benchmark"
-else bad "benchmark (compile)"; fi
-
-# 5. RTL Verilator tests -----------------------------------------------------
-if [ "${SKIP_RTL:-0}" = "1" ]; then
-    step "RTL Verilator tests (SKIPPED)"
-elif [ -f sim/run_rtl_tests.sh ]; then
-    step "RTL Verilator tests"
-    if bash sim/run_rtl_tests.sh; then ok "RTL tests"; else bad "RTL tests"; fi
-else
-    step "RTL Verilator tests"
-    bad "sim/run_rtl_tests.sh not found"
+if [ -d /c/msys64/ucrt64/bin ]; then
+    export PATH="/c/msys64/ucrt64/bin:/usr/bin:$PATH"
+    export VERILATOR_ROOT="${VERILATOR_ROOT:-C:/msys64/ucrt64/share/verilator}"
 fi
+export TMPDIR="${TMPDIR:-$ROOT/build/tmp}"
+export TEMP="$TMPDIR"
+export TMP="$TMPDIR"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-$ROOT/build/mplconfig}"
+mkdir -p build/csv "$TMPDIR"
 
-# 6. analysis (best effort; missing matplotlib is not a hard failure) --------
-if [ "${SKIP_ANALYSIS:-0}" != "1" ]; then
-    step "analysis (plots/CSV summaries)"
-    PY=$(pick_python)
-    echo "  using python: $PY"
-    for s in latency_compare message_profile book_depth; do
-        if [ -f "analysis/$s.py" ]; then
-            PATH="$ORIG_PATH" "$PY" "analysis/$s.py" --csv build/csv >/dev/null 2>&1 \
-                && ok "analysis/$s.py" || echo "  [skip] analysis/$s.py"
+pick_python() {
+    local candidates=(
+        "/c/Users/${USERNAME:-${USER:-karan}}/anaconda3/python.exe"
+        "/c/Users/${USERNAME:-${USER:-karan}}/AppData/Local/Programs/Python/Python313/python.exe"
+        python python3
+    )
+    local p
+    for p in "${candidates[@]}"; do
+        if PATH="$ORIG_PATH" "$p" -c "import matplotlib" >/dev/null 2>&1; then
+            printf '%s\n' "$p"
+            return
         fi
     done
-fi
+    printf '%s\n' python
+}
 
-echo
-if [ "$fail" = "0" ]; then
-    echo "======== ALL STAGES PASSED ========"
-else
-    echo "======== FAILURES PRESENT ========"
-fi
-exit $fail
+echo "==== software build and tests ===="
+make data test sw bench
+
+echo "==== software measurements ===="
+rm -f build/csv/*.csv build/csv/*.png build/csv/benchmark.txt
+MEASURE_CORE="${MEASURE_CORE:-0}"
+./build/orderbook_sw data/sample.itch --engine simd --symbol 1 \
+    --pin "$MEASURE_CORE" --csv build/csv --quiet
+./build/orderbook_sw data/sample.itch --engine map --symbol 1 \
+    --pin "$MEASURE_CORE" --csv build/csv --quiet
+./build/bench 500000 "$MEASURE_CORE" | tee build/csv/benchmark.txt
+
+echo "==== RTL lint and tests ===="
+make lint sim
+./sim/obj_rtl/tb_latency.exe data/sample.itch --max 20000 --csv build/csv --mhz 100 --quiet
+
+echo "==== board-chain simulation ===="
+make sim-board
+
+echo "==== analysis and result summary ===="
+PY="$(pick_python)"
+PATH="$ORIG_PATH" "$PY" analysis/latency_compare.py --csv build/csv
+PATH="$ORIG_PATH" "$PY" analysis/message_profile.py --csv build/csv
+PATH="$ORIG_PATH" "$PY" analysis/book_depth.py --csv build/csv
+PATH="$ORIG_PATH" "$PY" tools/write_results.py --csv build/csv --output docs/results.json
+
+mkdir -p docs/img
+for image in latency_compare message_profile book_depth; do
+    if [ -f "build/csv/$image.png" ]; then cp "build/csv/$image.png" docs/img/; fi
+done
+
+echo "==== ALL CHECKS PASSED ===="

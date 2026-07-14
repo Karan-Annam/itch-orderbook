@@ -36,8 +36,8 @@ TEST_SRCS = sw/tests/test_main.cpp            \
             sw/trade/fill_engine.cpp          \
             sw/trade/order_manager.cpp
 
-VERILATOR      ?= verilator_bin.exe
-VERILATOR_ROOT ?= C:/msys64/ucrt64/share/verilator
+VERILATOR      ?= $(shell command -v verilator_bin.exe >/dev/null 2>&1 && echo verilator_bin.exe || echo verilator)
+VERILATOR_ROOT ?= $(shell $(VERILATOR) -V 2>/dev/null | awk '/^VERILATOR_ROOT/{print $$3; exit}')
 export VERILATOR_ROOT
 
 # RTL in compile order — the package (ob_pkg.sv) must precede the modules that

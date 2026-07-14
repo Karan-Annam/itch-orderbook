@@ -16,7 +16,6 @@ namespace {
 
 constexpr uint16_t LOC = 1;
 
-Signals sig_none() { return Signals{}; }
 Signals sig_el() { Signals s; s.el = true; return s; }
 Signals sig_es() { Signals s; s.es = true; return s; }
 Signals sig_xl() { Signals s; s.xl = true; return s; }

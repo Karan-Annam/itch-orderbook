@@ -60,6 +60,30 @@ static void test_decode_replace_and_exec() {
     CHECK_EQ(me.match_number, 99ull);
 }
 
+static void test_rejects_wrong_body_lengths() {
+    struct Case { MsgType type; size_t len; };
+    const Case cases[] = {
+        {MsgType::AddOrder, blen::ADD},
+        {MsgType::AddOrderMPID, blen::ADD_MPID},
+        {MsgType::OrderExecuted, blen::EXEC},
+        {MsgType::OrderExecutedPrice, blen::EXEC_PRICE},
+        {MsgType::OrderCancel, blen::CANCEL},
+        {MsgType::OrderDelete, blen::DELETE},
+        {MsgType::OrderReplace, blen::REPLACE},
+        {MsgType::Trade, blen::TRADE},
+        {MsgType::SystemEvent, blen::SYSTEM},
+    };
+    uint8_t body[blen::MAX + 1] = {0};
+    for (const auto& c : cases) {
+        body[0] = static_cast<uint8_t>(c.type);
+        CHECK(ItchParser::decode_body(body, c.len - 1).type == MsgType::Unknown);
+        CHECK(ItchParser::decode_body(body, c.len + 1).type == MsgType::Unknown);
+    }
+    CHECK(ItchParser::decode_body(nullptr, 0).type == MsgType::Unknown);
+    body[0] = 'Z';
+    CHECK(ItchParser::decode_body(body, hdr::END).type == MsgType::Unknown);
+}
+
 // Parse a generated stream; per-type decoded counts must match generator stats.
 static void test_stream_counts_match_generator() {
     GenConfig cfg; cfg.num_symbols = 3; cfg.seed = 999;
@@ -103,6 +127,7 @@ static void test_udp_strip() {
 void run_itch_parser_tests() {
     RUN_TEST(test_decode_add_fields);
     RUN_TEST(test_decode_replace_and_exec);
+    RUN_TEST(test_rejects_wrong_body_lengths);
     RUN_TEST(test_stream_counts_match_generator);
     RUN_TEST(test_simd_count_type);
     RUN_TEST(test_udp_strip);

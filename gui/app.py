@@ -96,7 +96,7 @@ theme.hero(
     'Replay real market data through a NASDAQ ITCH 5.0 limit order book — '
     'then race three implementations of it, from std::map to silicon.',
     chips=['ITCH 5.0 feed handler', 'std::map reference',
-           'Direct-indexed + AVX2 SIMD', 'SystemVerilog RTL @ 250 MHz',
+           'Direct-indexed + AVX2 SIMD', 'SystemVerilog RTL @ 100 MHz',
            'Verilator cycle-accurate'],
 )
 st.write('')

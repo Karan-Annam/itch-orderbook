@@ -102,7 +102,7 @@ module uart_itch_bridge
   logic         rxb_v;         // one-cycle: rxb_q holds a received byte
   logic [7:0]   rxb_q;
 
-  always_ff @(posedge clk or negedge rst_n) begin
+  always_ff @(posedge clk) begin
     if (!rst_n) begin
       rxdiv_q <= '0; rxbit_q <= '0; rx_busy_q <= 1'b0;
       rxsh_q <= '0; rxb_v <= 1'b0; rxb_q <= '0;
@@ -145,7 +145,7 @@ module uart_itch_bridge
 
   assign uart_tx = tx_busy_q ? txsh_q[0] : 1'b1;
 
-  always_ff @(posedge clk or negedge rst_n) begin
+  always_ff @(posedge clk) begin
     if (!rst_n) begin
       txdiv_q <= '0; txbit_q <= '0; tx_busy_q <= 1'b0; txsh_q <= '1;
     end else if (!tx_busy_q) begin
@@ -188,7 +188,7 @@ module uart_itch_bridge
   assign in_nbytes = NBYTES_W'(1);
   assign in_valid  = (frx_q == FR_FEED);
 
-  always_ff @(posedge clk or negedge rst_n) begin
+  always_ff @(posedge clk) begin
     if (!rst_n) begin
       frx_q <= FR_MAG0; frx_cnt_q <= '0; ftype_q <= '0; csum_q <= '0;
       frame_err_q <= '0; feed_idx_q <= '0; feed_len_q <= '0;
@@ -327,7 +327,7 @@ module uart_itch_bridge
     end
   end
 
-  always_ff @(posedge clk or negedge rst_n) begin
+  always_ff @(posedge clk) begin
     if (!rst_n) begin
       ftx_q <= FT_IDLE; ftx_cnt_q <= '0; snap_q <= '0; tx_csum_q <= '0;
       tx_frame_pulse <= 1'b0;

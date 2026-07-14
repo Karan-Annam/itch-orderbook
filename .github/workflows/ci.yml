@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y g++ make verilator
+      - name: Software tests and RTL lint
+        run: make test lint
+      - name: RTL differential tests
+        run: bash sim/run_rtl_tests.sh
+      - name: Board-chain test
+        run: bash sim/run_board_sim.sh

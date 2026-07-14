@@ -85,7 +85,7 @@ LEDs: 0 = heartbeat (~0.7 Hz), 1 = host frame accepted, 2 = snapshot sent,
    No response? Check baud matches the divisor, then TX/RX orientation.
 3. `python tools/ob_host.py stream COM<n> <small.itch> --max 20` → snapshot
    shows `msg_total=20` and exact per-type counts.
-4. Acceptance: `python tools/ob_host.py verify COM<n> data/real_sample_scaled.itch`
+4. Acceptance: `python tools/ob_host.py verify COM<n> <converted.itch>`
    → final snapshot equals the banded-sim replay of the same file
    (`tools/run_real_data.sh`), with `band_drops=0`, `frame_errs=0`.
 

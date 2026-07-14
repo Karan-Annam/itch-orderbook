@@ -49,7 +49,7 @@ python -m gui.data.nasdaq_itch data/real/12302019.NASDAQ_ITCH50.gz \
     data/real/aapl_50k_scaled.itch \
     --symbol AAPL --max 50000 --tick-scale 100 --after-hm 09:35
 python tools/band_filter.py data/real/aapl_50k_scaled.itch \
-    data/real_sample_scaled.itch --window 1024
+    data/real/aapl_50k_banded.itch --window 1024
 ```
 
 `band_filter.py` fits the stream into one 1024-tick window (median-of-adds
@@ -61,10 +61,9 @@ hardware via the SET_BAND link frame before streaming. Start at 09:35, not
 09:30 — the opening auction leaves a legitimately crossed book whose orders
 are removed by Cross-Trade messages the project doesn't model.
 
-`data/real_sample_scaled.itch` is the one committed real-data artifact: a
-small regular-session excerpt used by `tools/run_real_data.sh` (software ==
-full-RTL == banded-RTL triple agreement) and the hardware acceptance demo
-(`tools/ob_host.py verify`).
+Converted recordings are intentionally not committed. Pass a locally converted
+and band-filtered file to `tools/run_real_data.sh`; the script checks software,
+full RTL, and the banded FPGA configuration against the same stream.
 
 ### Why --tick-scale 100 and the band filter
 

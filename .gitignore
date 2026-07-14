@@ -9,8 +9,6 @@ sim/obj_top/
 data/*.itch
 *.NASDAQ_ITCH50*
 data/real/
-# ...except the committed real-data excerpt used by tools/run_real_data.sh
-!data/real_sample_scaled.itch
 
 # board sim / verilated board objects
 sim/obj_rtl_band/
@@ -29,7 +27,8 @@ __pycache__/
 # gui session artifacts
 gui/runs/
 gui/data_cache/
-.streamlit/
+.streamlit/*
+!.streamlit/config.toml
 
 # waveforms / logs
 *.vcd

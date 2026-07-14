@@ -32,67 +32,7 @@ struct ParseStats {
 class ItchParser {
 public:
     // Decode one message body (without the 2-byte length prefix).
-    static DecodedMessage decode_body(const uint8_t* b, size_t body_len) {
-        DecodedMessage m;
-        if (body_len < hdr::END) { m.type = MsgType::Unknown; return m; }
-        m.type         = static_cast<MsgType>(static_cast<char>(b[hdr::TYPE]));
-        m.stock_locate = be16(b + hdr::STOCK_LOC);
-        m.stock_idx    = m.stock_locate;
-        m.timestamp    = be64(b + hdr::TIMESTAMP);  // 8-byte timestamp (spec)
-
-        switch (m.type) {
-            case MsgType::AddOrder:
-            case MsgType::AddOrderMPID:
-                m.order_ref = be64(b + off::ADD_REF);
-                m.side      = static_cast<char>(b[off::ADD_SIDE]);
-                m.shares    = be32(b + off::ADD_SHARES);
-                copy8(m.stock, b + off::ADD_STOCK);
-                m.price     = be32(b + off::ADD_PRICE);
-                if (m.type == MsgType::AddOrderMPID && body_len >= blen::ADD_MPID)
-                    for (int i = 0; i < 4; ++i) m.mpid[i] = char(b[off::ADD_MPID + i]);
-                break;
-            case MsgType::OrderExecuted:
-                m.order_ref    = be64(b + off::EXEC_REF);
-                m.shares       = be32(b + off::EXEC_SHARES);
-                m.match_number = be64(b + off::EXEC_MATCH);
-                break;
-            case MsgType::OrderExecutedPrice:
-                m.order_ref    = be64(b + off::EXECP_REF);
-                m.shares       = be32(b + off::EXECP_SHARES);
-                m.match_number = be64(b + off::EXECP_MATCH);
-                m.printable    = (char(b[off::EXECP_PRINTABLE]) == 'Y') ? 1 : 0;
-                m.price        = be32(b + off::EXECP_PRICE);  // execution price
-                break;
-            case MsgType::OrderCancel:
-                m.order_ref = be64(b + off::CANCEL_REF);
-                m.shares    = be32(b + off::CANCEL_SHARES);
-                break;
-            case MsgType::OrderDelete:
-                m.order_ref = be64(b + off::DELETE_REF);
-                break;
-            case MsgType::OrderReplace:
-                m.order_ref     = be64(b + off::REPL_ORIG_REF);
-                m.new_order_ref = be64(b + off::REPL_NEW_REF);
-                m.shares        = be32(b + off::REPL_SHARES);
-                m.price         = be32(b + off::REPL_PRICE);
-                break;
-            case MsgType::Trade:
-                m.order_ref    = be64(b + off::TRADE_REF);
-                m.side         = static_cast<char>(b[off::TRADE_SIDE]);
-                m.shares       = be32(b + off::TRADE_SHARES);
-                copy8(m.stock, b + off::TRADE_STOCK);
-                m.price        = be32(b + off::TRADE_PRICE);
-                m.match_number = be64(b + off::TRADE_MATCH);
-                break;
-            case MsgType::SystemEvent:
-                m.event_code = static_cast<char>(b[off::SYS_EVENT]);
-                break;
-            default:
-                m.type = MsgType::Unknown;
-                break;
-        }
-        return m;
-    }
+    static DecodedMessage decode_body(const uint8_t* b, size_t body_len);
 
     // Walk a raw length-prefixed ITCH stream, invoking handler(const DecodedMessage&)
     // for each message. Returns parse stats. `handler` may be any callable.

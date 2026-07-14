@@ -12,8 +12,7 @@
 ## Run everything
 
 ```bash
-bash run_all.sh            # build SW, run all SW tests, benchmark, RTL tests, analysis
-SKIP_RTL=1 bash run_all.sh # software only
+bash run_all.sh            # build, all tests, benchmark, board sim, analysis
 ```
 
 Individual pieces:

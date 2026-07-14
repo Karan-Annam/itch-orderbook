@@ -14,6 +14,7 @@ module itch_decoder
   input  logic                msg_beat_valid,
   input  logic [WIDX_W-1:0]   msg_widx,
   input  logic                msg_complete,
+  input  logic [15:0]         msg_len,
 
   input  logic        dec_accept,     // engine latched the current message
 
@@ -103,8 +104,13 @@ module itch_decoder
         end
       end
       if (msg_complete) begin
-        dec       <= d_c;
-        dec_valid <= 1'b1;
+        if (body_len(body[0]) != 0 && msg_len == body_len(body[0])) begin
+          dec       <= d_c;
+          dec_valid <= 1'b1;
+        end else begin
+          dec       <= '0;
+          dec_valid <= 1'b0;
+        end
       end else if (dec_accept) begin
         dec_valid <= 1'b0;
       end

@@ -1,9 +1,6 @@
-// cpu_affinity.hpp — pin a thread to an isolated core and request real-time
-// scheduling. This removes scheduler migration and most OS jitter from the hot
-// path, which is what turns a noisy software latency distribution into a tight
-// one. The calls are best-effort and platform-specific; on platforms where they
-// are unavailable (Windows/MinGW dev host) they degrade to no-ops so the rest of
-// the pipeline still builds and runs.
+// cpu_affinity.hpp — pin a thread to a chosen logical core and request elevated
+// scheduling priority. These best-effort, platform-specific calls reduce
+// migration and scheduler jitter; they do not reserve or isolate the core.
 #pragma once
 
 #include <cstdio>
@@ -11,6 +8,11 @@
 #if defined(__linux__)
 #  include <pthread.h>
 #  include <sched.h>
+#elif defined(_WIN32)
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
 #endif
 
 namespace ob {
@@ -22,6 +24,10 @@ inline bool pin_to_core(int core_id) {
     CPU_ZERO(&set);
     CPU_SET(core_id, &set);
     return pthread_setaffinity_np(pthread_self(), sizeof(set), &set) == 0;
+#elif defined(_WIN32)
+    if (core_id < 0 || core_id >= 64) return false;
+    const DWORD_PTR mask = DWORD_PTR(1) << unsigned(core_id);
+    return SetThreadAffinityMask(GetCurrentThread(), mask) != 0;
 #else
     (void)core_id;
     return false;  // not supported on this platform; busy-poll still works
@@ -34,6 +40,9 @@ inline bool set_realtime_priority(int priority = 80) {
     sched_param sp{};
     sp.sched_priority = priority;
     return pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) == 0;
+#elif defined(_WIN32)
+    (void)priority;
+    return SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) != 0;
 #else
     (void)priority;
     return false;

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """message_profile.py — per-message-type count and latency profile.
 
-Reads per-type software latency histograms (latency_sw_<Type>.csv) and the
+Reads per-type software latency histograms (latency_simd_<Type>.csv) and the
 perf counters CSV, prints a table of count + p50/p99 per message type, and (if
-matplotlib is present) draws a grouped bar chart. Delete/Replace are expected to
-be the most expensive types (best-price rescan / sequential sub-ops).
+matplotlib is present) draws a grouped bar chart. Among book-updating messages,
+Delete/Replace are expected to be expensive (rescan / sequential sub-ops).
 """
 import csv, os, sys, argparse
 
@@ -45,14 +45,14 @@ def main():
 
     rows = []
     for t in TYPES:
-        h = load_hist(os.path.join(d, f"latency_sw_{t}.csv"))
+        h = load_hist(os.path.join(d, f"latency_simd_{t}.csv"))
         n = sum(c for _, c in h)
         if n:
             rows.append((t, n, pct(h, 0.50), pct(h, 0.99)))
 
     if not rows:
         print(f"[message_profile] no per-type CSVs in {d}; run orderbook_sw --csv {d}")
-        return 0
+        return 1
 
     print(f"{'type':>10} {'count':>10} {'p50 ns':>8} {'p99 ns':>8}")
     out = os.path.join(d, "message_profile.csv")
@@ -76,8 +76,13 @@ def main():
         plt.bar([i - 0.2 for i in x], p50, width=0.4, label="p50", color="#2b6cb0")
         plt.bar([i + 0.2 for i in x], p99, width=0.4, label="p99", color="#dd6b20")
         plt.xticks(list(x), ts, rotation=30)
-        plt.ylabel("latency (ns)")
+        # Four System messages make their p99 a noisy startup outlier. A log
+        # axis keeps the high value visible without flattening every real book
+        # update into an unreadable strip.
+        plt.yscale("log")
+        plt.ylabel("latency (ns, log scale)")
         plt.title("Per-message-type latency (software)")
+        plt.grid(True, axis="y", which="both", alpha=0.2)
         plt.legend(); plt.tight_layout()
         png = os.path.join(d, "message_profile.png")
         plt.savefig(png, dpi=110)

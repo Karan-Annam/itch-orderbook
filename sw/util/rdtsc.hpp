@@ -7,8 +7,10 @@
 // std::chrono::steady_clock.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <chrono>
+#include <limits>
 #include <thread>
 
 #if defined(_MSC_VER)
@@ -17,42 +19,53 @@
 
 namespace ob {
 
-// Read the time-stamp counter. Compiles to a single RDTSC instruction.
-inline uint64_t rdtsc() {
+struct TscSample {
+    uint64_t ticks;
+    uint32_t aux;
+};
+
+// RDTSCP reports the logical processor in TSC_AUX. LFENCE on both sides keeps
+// surrounding loads/instructions out of the measured region; the compiler
+// memory clobber prevents source-level motion across the sample.
+inline TscSample tsc_sample() {
 #if defined(__GNUC__) || defined(__clang__)
-    uint32_t lo, hi;
-    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
-    return (static_cast<uint64_t>(hi) << 32) | lo;
+    uint32_t lo, hi, aux;
+    __asm__ __volatile__("lfence\n\trdtscp\n\tlfence"
+                         : "=a"(lo), "=d"(hi), "=c"(aux)
+                         : : "memory");
+    return {(static_cast<uint64_t>(hi) << 32) | lo, aux};
 #else
-    return __rdtsc();
+    unsigned aux;
+    _mm_lfence();
+    const uint64_t ticks = __rdtscp(&aux);
+    _mm_lfence();
+    return {ticks, aux};
 #endif
 }
 
-// Serialising variant: RDTSCP waits for prior instructions to retire, so it is
-// the correct fence to bracket a measured region (avoids out-of-order leakage).
-inline uint64_t rdtscp() {
-#if defined(__GNUC__) || defined(__clang__)
-    uint32_t lo, hi, aux;
-    __asm__ __volatile__("rdtscp" : "=a"(lo), "=d"(hi), "=c"(aux));
-    return (static_cast<uint64_t>(hi) << 32) | lo;
-#else
-    unsigned aux;
-    return __rdtscp(&aux);
-#endif
+inline uint64_t tsc_sample_overhead(unsigned samples = 1000) {
+    uint64_t best = std::numeric_limits<uint64_t>::max();
+    for (unsigned i = 0; i < samples; ++i) {
+        const TscSample a = tsc_sample();
+        const TscSample b = tsc_sample();
+        if (a.aux == b.aux && b.ticks >= a.ticks)
+            best = std::min(best, b.ticks - a.ticks);
+    }
+    return best == std::numeric_limits<uint64_t>::max() ? 0 : best;
 }
 
 // Calibrate ticks-per-nanosecond by sleeping a known wall-clock interval.
 // Returns ticks/ns (e.g. ~3.0 on a 3 GHz invariant TSC).
 inline double calibrate_tsc(int sample_ms = 50) {
     using clock = std::chrono::steady_clock;
-    const uint64_t t0 = rdtscp();
+    const TscSample t0 = tsc_sample();
     const auto     w0 = clock::now();
     std::this_thread::sleep_for(std::chrono::milliseconds(sample_ms));
-    const uint64_t t1 = rdtscp();
+    const TscSample t1 = tsc_sample();
     const auto     w1 = clock::now();
     const double ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(w1 - w0).count();
-    const double ticks = static_cast<double>(t1 - t0);
+    const double ticks = static_cast<double>(t1.ticks - t0.ticks);
     return ticks / ns;  // ticks per nanosecond
 }
 

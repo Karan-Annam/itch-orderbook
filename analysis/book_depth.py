@@ -19,7 +19,7 @@ def main():
     path = os.path.join(args.csv, "book_depth.csv")
     if not os.path.exists(path):
         print(f"[book_depth] {path} not found; run orderbook_sw --csv {args.csv}")
-        return 0
+        return 1
 
     seq, bid, ask, bid_depth, ask_depth, spread = [], [], [], [], [], []
     with open(path) as f:
@@ -36,7 +36,7 @@ def main():
 
     if not seq:
         print("[book_depth] no rows parsed")
-        return 0
+        return 1
 
     avg_spread = sum(spread) / len(spread)
     print(f"[book_depth] {len(seq)} snapshots")

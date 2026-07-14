@@ -170,7 +170,8 @@ module orderbook_top
   itch_decoder u_dec (
     .clk(clk), .rst(rst),
     .msg_data(f_data), .msg_nbytes(f_nbytes), .msg_beat_valid(f_beat_valid),
-    .msg_widx(f_widx), .msg_complete(f_complete), .dec_accept(dec_accept),
+    .msg_widx(f_widx), .msg_complete(f_complete), .msg_len(f_len),
+    .dec_accept(dec_accept),
     .dec(dec), .dec_valid(dec_valid)
   );
 

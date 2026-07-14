@@ -8,7 +8,7 @@
 # exact configuration the bitstream ships.
 #
 # Prereqs: `make sw` and `make sim` (builds obj_rtl / obj_rtl_band).
-# Usage:   bash tools/run_real_data.sh [file.itch]  (default data/real_sample_scaled.itch)
+# Usage:   bash tools/run_real_data.sh <converted-and-banded-file.itch>
 set -u
 export PATH="/c/msys64/ucrt64/bin:$PATH"
 export VERILATOR_ROOT="C:/msys64/ucrt64/share/verilator"
@@ -17,7 +17,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 cd "$ROOT" || exit 2
 
-FILE="${1:-data/real_sample_scaled.itch}"
+FILE="${1:-}"
+[ -n "$FILE" ] || { echo "usage: $0 <converted-and-banded-file.itch>"; exit 2; }
 [ -f "$FILE" ] || { echo "missing $FILE — see data/README.md for the conversion recipe"; exit 2; }
 [ -x build/orderbook_sw ]              || { echo "run 'make sw' first"; exit 2; }
 [ -f sim/obj_rtl/Vorderbook_top__ALL.a ]      || { echo "run 'make sim' first"; exit 2; }

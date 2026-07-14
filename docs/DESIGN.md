@@ -61,12 +61,12 @@ array where price *is* the index, so an update is a load, an add, a store. Best
 bid/ask are maintained incrementally; the only expensive case is deleting the
 last shares at the best price, which triggers a vectorized scan toward the next
 non-empty level. `std::map` (the original book, kept as `reference_book.hpp`)
-does the same job with a red-black tree; the bench shows the direct+SIMD book is
-roughly 2× faster on the same stream (1.5–2.6× run to run).
+does the same job with a red-black tree; the latest seven-trial median benchmark
+measures the direct+SIMD book at 1.70× the baseline throughput.
 
 **Measurement.** RDTSC around parse+update per message, bucketed into a
 histogram per message type (p50/p95/p99/p99.9/p99.99). Trade messages don't
-touch the book and clock in around 35 ns; Deletes and Replaces are the most
+touch the book and clock in around 26 ns; Deletes and Replaces are the most
 expensive, exactly as you'd expect (rescans and sequential sub-operations).
 
 ## Hardware side
@@ -148,48 +148,30 @@ tests.
 
 ## What the comparison actually shows
 
-Software (this machine, AVX2 tier): p50 around 190 ns per message, p99 around
-540 ns, p99.9 around 1.3 µs. The tail is cache misses and OS jitter, nothing
-in the code path varies by 10× on its own.
+Software (this machine, AVX2 tier): serialized TSC measurement over parse plus
+book update gives 203 ns p50, 527 ns p99, and 671 ns p99.9. The harness
+subtracts timer overhead and drops samples that migrate logical processors.
+The book-only benchmark separately reports the median of seven alternating,
+pinned trials: 208.1 ns/message for `std::map` and 122.7 ns/message for the
+direct-index/SIMD engine (1.70×), followed by a final-state equality check.
 
-Hardware: with the original byte-serial front end, a mixed 20k-message stream
-sustained one commit every ~50 cycles (200 ns at the modeled 250 MHz) — a
-38-byte Add spent ~40 of those cycles just shifting bytes in, so software's
-~190 ns median actually beat it. That measurement is what motivated the
-current front end: a 16-byte-per-cycle ingest bus plus ingest/book-update
-overlap. Same stream now: service p50 = 15 cycles (60 ns), p99 = 21 cycles
-(84 ns), ~20.9M msg/s sustained — 4.2× the byte-serial throughput, and the
-`ingest_stall_cycles` counter confirms the engine (not ingest) is the
-bottleneck for 81% of the run. An Add arriving at an idle book commits ~60 ns
-after its first byte.
-
-So at the modeled clock the hardware now beats software's *median* while
-keeping the property that was always its real advantage: the p99.9 service
-time equals the p99 (no cache misses against fixed-latency SRAM, no OS
-scheduler, no other processes competing for the core), while software's
-p99.9 is ~7× its own median. That gap matters specifically because a real
-feed's worst moments (bursts, volatility, everyone's software degrading at
-once) are exactly when a fixed, boring latency number becomes a genuine edge
-rather than a nice-to-have. Two honest caveats stand:
-
-1. **250 MHz is a conservative, unsynthesized target,** not a
-   post-place-and-route ceiling — but the wide framer's compare/shift logic is
-   also shallow enough that it isn't the critical path; the async-read SRAMs
-   are (see Limitations).
-2. **The CPU still wins on raw clock.** A 4-5 GHz out-of-order core is
-   extremely good at hot, predictable, cache-resident integer work; the
-   hardware wins by doing less per message (no instruction stream at all),
-   not by switching faster.
+Hardware uses a 16-byte-per-cycle ingest bus with ingest/book-update overlap.
+On the same 20k-message workload, end-to-end latency (first input byte through
+commit) is 55 cycles p50, 91 p99, and 173 p99.9. Commit-to-commit service time
+is 19 cycles p50 and 27 cycles at both p99 and p99.9. At the implemented
+100 MHz Spartan-7 clock those values are 550 ns, 910 ns, 1.73 µs and a median
+service rate of 5.26 M messages/s. The cycle counts are the portable result;
+nanoseconds are derived only from the implemented clock.
 
 The remaining hardware tail is the occasional best-price scan after the top
 level empties — bounded, deterministic, and attributed cycle-by-cycle in the
 perf counters rather than being a scheduler surprise.
 
-## Limitations
+## Implementation scope
 
 - RTL is single-symbol; the software book handles all symbols. Multi-symbol
   hardware needs per-symbol book banks or a book-state cache.
-- The RTL memories use combinational (async) reads. Valid LUTRAM, but a real
-  FPGA build should re-map them to registered BRAM with an extra pipeline stage.
+- The FPGA configuration uses a price-banded BRAM implementation; the larger
+  simulation configuration is not intended to map directly to this device.
 - No live UDP test on this machine (no feed, no libxdp); the receiver design
   follows the standard AF_XDP pattern but is exercised only via file replay.

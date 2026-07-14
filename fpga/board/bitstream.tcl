@@ -71,5 +71,29 @@ report_drc            -file build/drc_route_$board.rpt
 set wns [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]]
 puts "== fpga_top routed on $part ($board): setup WNS = $wns ns =="
 
+# route_design and write_bitstream both fail on incomplete routing.  Keep the
+# report as an artifact rather than parsing its version-dependent prose.
+report_route_status -file build/route_status_$board.rpt
+if {$wns eq "" || $wns < 0.0} {
+  error "timing failed: setup WNS=$wns ns"
+}
+
+set fatal_drc [get_drc_violations -quiet -filter {
+  SEVERITY == "Error" || SEVERITY == "Critical Warning"
+}]
+set ram_async_drc {}
+foreach violation [get_drc_violations -quiet] {
+  set rule [get_property NAME $violation]
+  if {[string match "REQP-1839*" $rule] || [string match "REQP-1840*" $rule]} {
+    lappend ram_async_drc $violation
+  }
+}
+if {[llength $fatal_drc] != 0} {
+  error "fatal DRC violations remain: $fatal_drc"
+}
+if {[llength $ram_async_drc] != 0} {
+  error "BRAM asynchronous-control DRC violations remain: $ram_async_drc"
+}
+
 write_bitstream -force build/fpga_top_$board.bit
 puts "== bitstream: build/fpga_top_$board.bit =="

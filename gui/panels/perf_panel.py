@@ -73,22 +73,17 @@ def _methodology() -> None:
             'per message (compute only, no I/O). This is *measured* wall-clock time '
             'on your CPU. Median = typical cost; the far tail is host OS jitter '
             '(scheduler preemptions), not the algorithm.\n'
-            '- **RTL hardware** — **cycles** from a message\'s *last input byte to '
-            'its commit* in the Verilated pipeline (decode + book update + best '
-            'tracker), excluding the 1-byte/cycle ingest so it lines up with the SW '
-            'compute window. Cycles are architecturally real; ns = cycles ÷ clock.\n'
+            '- **RTL hardware** — **cycles** from a message\'s first input byte to '
+            'its commit in the Verilated 128-bit pipeline. Cycles are '
+            'architecturally real; ns = cycles ÷ implemented clock.\n'
             '- **RTL throughput** — reported separately as *service time* '
             '(commit-to-commit), which **is** ingest-bound (≈200 ns/msg → 5 M msg/s).\n\n'
             '**What to trust (important)**\n'
             '- Verilator is **cycle-accurate, not timing-accurate.** It tells you '
             '*how many cycles* an op takes — not what clock the design can run at.\n'
-            '- The **250 MHz is an assumption.** Real Fmax comes from **synthesis** '
-            '(Vivado/Yosys + timing analysis) — the critical path (wide price '
-            'comparators, the rescan loop) sets it. Cranking the MHz just rescales '
-            'the ns label; it proves nothing until the design closes timing.\n'
-            '- **So: the cycle counts and the determinism (bounded tail) are solid '
-            'and clock-independent. The absolute ns gap is directional until you '
-            'synthesize.** Adjust the assumed clock below to see how soft the ns is.')
+            '- The default **100 MHz** is the implemented Spartan-7 constraint. '
+            'Cycle counts remain portable; absolute nanoseconds depend on the '
+            'target and post-route timing result.')
 
 
 
@@ -100,7 +95,13 @@ def _hist(run_dir: str, engine: str, typ: str = 'all') -> pd.DataFrame:
     if not os.path.exists(p):
         return pd.DataFrame()
     try:
-        return pd.read_csv(p)
+        frame = pd.read_csv(p)
+        if 'latency_cycles' in frame.columns and 'latency_ns' not in frame.columns:
+            mhz = _counters(run_dir, engine).get('clock_mhz', 0)
+            if mhz <= 0:
+                return pd.DataFrame()
+            frame['latency_ns'] = frame['latency_cycles'] * (1000.0 / mhz)
+        return frame
     except Exception:
         return pd.DataFrame()
 
@@ -169,8 +170,8 @@ def _scoreboard(run_dir: str, present: list[str]) -> None:
     if thr:
         st.caption(
             f"RTL sustained throughput ≈ **{thr/1e6:.1f} M msg/s** "
-            f"(service time {hw.get('service_p50_ns', 0):.0f} ns/msg, bounded by the "
-            "1-byte/cycle input — a separate number from the compute latency above). "
+            f"(median service time {hw.get('service_p50_cycles', 0):.0f} cycles; "
+            "a separate number from end-to-end latency above). "
             "Software throughput isn't shown: its timer measures compute only, "
             "with no I/O modelled.")
 
@@ -281,9 +282,9 @@ def _rtl_counters(run_dir: str) -> None:
     if not c:
         return
     theme.section('Inside the RTL — cycles are the real metric',
-                  'Cycle counts are architecturally exact. Nanoseconds only exist '
-                  'once you assume a clock — so here you pick it.')
-    sim_mhz = c.get('mhz', 250) or 250
+                  'Cycle counts are architecturally exact; the default conversion '
+                  'uses the implemented 100 MHz Spartan-7 clock.')
+    sim_mhz = c.get('clock_mhz', 100) or 100
     ns_per_cyc_sim = 1000.0 / sim_mhz
 
     # Per-op latency in CYCLES (invariant) from the per-type ns histograms.
@@ -301,7 +302,7 @@ def _rtl_counters(run_dir: str) -> None:
 
     # Interactive: the same cycle count, scaled to whatever clock you assume.
     st.write('')
-    assumed = st.slider('Assumed clock frequency (MHz) — needs synthesis to confirm',
+    assumed = st.slider('Explore cycle conversion at a clock frequency (MHz)',
                         100, 1000, int(sim_mhz), 50)
     ns_at = all_cyc * (1000.0 / assumed)
     st.markdown(
@@ -315,8 +316,10 @@ def _rtl_counters(run_dir: str) -> None:
               f"{theme.fmt_int(c.get('msg_total', 0))} msgs", theme.MUTED)
     theme.kpi(k2[1], 'Best-price rescans', theme.fmt_int(c.get('scan_count', 0)),
               f"{theme.fmt_int(c.get('scan_cycles_total',0))} cycles total", '#f59e0b')
-    theme.kpi(k2[2], 'Service time', f"{c.get('service_p50_ns',0):.0f} ns/msg",
-              f"≈ {c.get('throughput_msg_s',0)/1e6:.1f} M msg/s (ingest-bound)", theme.MUTED)
+    service_cyc = c.get('service_p50_cycles', 0)
+    theme.kpi(k2[2], 'Service time', f"{service_cyc:.0f} cycles/msg",
+              f"{service_cyc * ns_per_cyc_sim:.0f} ns at {sim_mhz:.0f} MHz; "
+              f"≈ {c.get('throughput_msg_s',0)/1e6:.1f} M msg/s", theme.MUTED)
 
     p1, p2, pg = c.get('hash_probe_1', 0), c.get('hash_probe_2', 0), c.get('hash_probe_gt2', 0)
     tot = p1 + p2 + pg

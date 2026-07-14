@@ -99,6 +99,24 @@ namespace blen {
     constexpr size_t MAX        = 48;
 }
 
+// Exact body length for a supported internal message type. Returning zero
+// means the type is unsupported. Keeping this next to the layout constants
+// lets every parser validate a body before touching type-specific fields.
+inline constexpr size_t msg_body_len(MsgType t) {
+    switch (t) {
+        case MsgType::AddOrder:           return blen::ADD;
+        case MsgType::AddOrderMPID:       return blen::ADD_MPID;
+        case MsgType::OrderExecuted:      return blen::EXEC;
+        case MsgType::OrderExecutedPrice: return blen::EXEC_PRICE;
+        case MsgType::OrderCancel:        return blen::CANCEL;
+        case MsgType::OrderDelete:        return blen::DELETE;
+        case MsgType::OrderReplace:       return blen::REPLACE;
+        case MsgType::Trade:              return blen::TRADE;
+        case MsgType::SystemEvent:        return blen::SYSTEM;
+        default:                          return 0;
+    }
+}
+
 // Field offsets within each message body (after the 13-byte header).
 namespace off {
     // Add / AddMPID ('A','F')

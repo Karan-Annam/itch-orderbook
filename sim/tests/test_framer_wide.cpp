@@ -17,6 +17,8 @@
 //  4. Stall with residual bytes — long engine occupancy (best-price scans)
 //     under full-rate input must drop in_ready with bytes parked in the
 //     window, and lose nothing.
+//  5. Malformed lengths — zero, short, and oversized frames are discarded
+//     without committing stale decoder state or losing the following frame.
 #include "scenario.hpp"
 
 using namespace obsim;
@@ -161,6 +163,26 @@ int main(int argc, char** argv) {
                (unsigned long long)c, (unsigned long long)n);
         SCHECK(ctx, stalls > 0, "in_ready never dropped under full-rate input");
         check_book(ctx, "stall", drv.top(), ref);
+    }
+
+    // ---- 5. malformed lengths are dropped and alignment recovers ------------
+    {
+        std::vector<uint8_t> s;
+        s.push_back(0); s.push_back(0);                 // zero-length frame
+        s.push_back(0); s.push_back(13);                // short Add body
+        s.push_back('A');
+        for (int i = 1; i < 13; ++i) s.push_back(0);
+        s.push_back(0); s.push_back(49);                // decoder-overflow frame
+        s.push_back('P');
+        for (int i = 1; i < 49; ++i) s.push_back(uint8_t(i));
+        append(s, sysevt('Q'));                         // must still commit
+
+        RtlDriver drv; drv.reset(true);
+        uint64_t c = drive_beats(drv, s, 1, [](size_t) { return WORD_BYTES; });
+        SCHECK(ctx, c == 1, "malformed stream committed %llu valid messages",
+               (unsigned long long)c);
+        SCHECK(ctx, drv.top()->msg_total == 1, "malformed frames reached engine");
+        SCHECK(ctx, drv.top()->mc_system == 1, "following System frame was lost");
     }
 
     std::printf("[framer_wide] %d checks, %d failures\n", ctx.checks, ctx.fails);

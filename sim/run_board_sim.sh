@@ -7,14 +7,22 @@
 # ~8k cycles instead of ~450k.
 set -u
 
-export PATH="/c/msys64/ucrt64/bin:$PATH"
-export VERILATOR_ROOT="C:/msys64/ucrt64/share/verilator"
+if [ -d /c/msys64/ucrt64/bin ]; then
+    export PATH="/c/msys64/ucrt64/bin:$PATH"
+fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 cd "$ROOT" || exit 2
 
-VBIN=verilator_bin.exe
+if command -v verilator_bin.exe >/dev/null 2>&1; then
+    VBIN=verilator_bin.exe
+else
+    VBIN=verilator
+fi
+if [ -z "${VERILATOR_ROOT:-}" ]; then
+    export VERILATOR_ROOT="$($VBIN -V | awk '/^VERILATOR_ROOT/{print $3; exit}')"
+fi
 VINC="$VERILATOR_ROOT/include"
 OBJ="$ROOT/sim/obj_board"
 CXX=g++

@@ -19,8 +19,9 @@
 // >= 2 cycles (S_SETTLE -> S_HDR -> S_BODY) before the next message's bytes
 // touch body[], so the latched dec is never contaminated.
 //
-// A zero-length frame produces one bounded garbage commit (engine treats the
-// unknown type as System) instead of wandering through 64K phantom bytes.
+// Zero-length frames are discarded. Bodies larger than MSG_MAX_BYTES are
+// consumed without being presented to the decoder, preserving alignment for
+// the next frame while preventing decoder storage from being overrun.
 module itch_framer
   import ob_pkg::*;
 (
@@ -54,7 +55,7 @@ module itch_framer
 
   localparam int WIN_BYTES = 2 * WORD_BYTES;   // 32-byte compacting window
 
-  typedef enum logic [1:0] {S_HDR, S_BODY, S_SETTLE} state_t;
+  typedef enum logic [1:0] {S_HDR, S_BODY, S_SETTLE, S_DROP} state_t;
   state_t state;
 
   logic [7:0]        win_q [WIN_BYTES];  // byte 0 = oldest unconsumed byte
@@ -76,7 +77,14 @@ module itch_framer
           if (cnt_q >= 6'(WORD_BYTES)) consume_c = 6'(WORD_BYTES);
         end
       end
-      default: ;  // S_SETTLE / S_WAIT_DONE consume nothing
+      S_DROP: begin
+        if (remain_q <= 16'(WORD_BYTES)) begin
+          if (16'(cnt_q) >= remain_q) consume_c = remain_q[5:0];
+        end else if (cnt_q >= 6'(WORD_BYTES)) begin
+          consume_c = 6'(WORD_BYTES);
+        end
+      end
+      default: ;  // S_SETTLE consumes nothing
     endcase
   end
 
@@ -132,7 +140,12 @@ module itch_framer
           len_q    <= {win_q[0], win_q[1]};
           remain_q <= {win_q[0], win_q[1]};
           widx_q   <= '0;
-          state    <= ({win_q[0], win_q[1]} == 16'd0) ? S_SETTLE : S_BODY;
+          if ({win_q[0], win_q[1]} == 16'd0)
+            state <= S_HDR;
+          else if ({win_q[0], win_q[1]} > 16'(MSG_MAX_BYTES))
+            state <= S_DROP;
+          else
+            state <= S_BODY;
         end
         S_BODY: if (consume_c != 6'd0) begin
           remain_q <= remain_q - 16'(consume_c);
@@ -140,6 +153,10 @@ module itch_framer
           else                             widx_q <= widx_q + WIDX_W'(1);
         end
         S_SETTLE: if (!dec_pending) state <= S_HDR;  // msg_complete pulses now
+        S_DROP: if (consume_c != 6'd0) begin
+          remain_q <= remain_q - 16'(consume_c);
+          if (remain_q <= 16'(WORD_BYTES)) state <= S_HDR;
+        end
         default:  state <= S_HDR;
       endcase
     end

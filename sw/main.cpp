@@ -86,8 +86,8 @@ int main(int argc, char** argv) {
     if (ladder_every < 1) ladder_every = 1;
     if (ladder_depth < 1) ladder_depth = 1;
 
-    // Optional: pin to an isolated core + real-time priority (Linux; no-op
-    // elsewhere) to remove scheduler jitter from the measured hot path.
+    // Optional: pin to one logical core and request elevated priority to reduce
+    // scheduler migration and jitter on supported hosts.
     if (pin_core >= 0) {
         bool pinned = pin_to_core(pin_core);
         set_realtime_priority();
@@ -174,6 +174,8 @@ int main(int argc, char** argv) {
     const size_t   len  = rx.size();
     size_t o = 0;
     uint64_t seq = 0;
+    uint64_t tsc_migrations = 0;
+    const uint64_t tsc_overhead = tsc_sample_overhead();
 
     const bool is_simd = (engine_mode == "simd");
 
@@ -186,7 +188,7 @@ int main(int argc, char** argv) {
         // engines. stats.on_message() (VWAP/spread/imbalance) is deliberately
         // OUTSIDE the timer so the simd vs map comparison is apples-to-apples —
         // otherwise simd would be charged for stats work that map never runs.
-        const uint64_t t0 = rdtscp();
+        const TscSample t0 = tsc_sample();
         DecodedMessage m = ItchParser::decode_body(body, blen);
         BookEngine::ExecResult ex;
         if (is_simd) {
@@ -194,14 +196,20 @@ int main(int argc, char** argv) {
         } else {
             ref_book->apply(m);
         }
-        const uint64_t t1 = rdtscp();
+        const TscSample t1 = tsc_sample();
 
         if (is_simd) stats.on_message(m, ex);   // untimed: feeds VWAP/book_depth
 
-        const double ns = clk.to_ns(t1 - t0);
-        const int idx = msg_type_idx(m.type);
-        hist[idx].record(ns);
-        all.record(ns);
+        if (t0.aux == t1.aux && t1.ticks >= t0.ticks) {
+            const uint64_t elapsed = t1.ticks - t0.ticks;
+            const double ns = clk.to_ns(elapsed > tsc_overhead
+                                            ? elapsed - tsc_overhead : 0);
+            const int idx = msg_type_idx(m.type);
+            hist[idx].record(ns);
+            all.record(ns);
+        } else {
+            ++tsc_migrations;
+        }
 
         ++seq;
         if (!quiet && (seq % 100000 == 0)) {
@@ -350,6 +358,8 @@ int main(int argc, char** argv) {
     }
 
     std::printf("  total messages processed: %llu\n", (unsigned long long)seq);
+    std::printf("  latency samples dropped after core migration: %llu\n",
+                (unsigned long long)tsc_migrations);
 
     // --final-state: one machine-readable line for diffing against the RTL
     // banded replay and the hardware snapshot (tools/run_real_data.sh,
@@ -387,6 +397,13 @@ int main(int argc, char** argv) {
         if (FILE* f = std::fopen(pc.c_str(), "w")) {
             std::fprintf(f, "counter,value\n");
             std::fprintf(f, "messages,%llu\n", (unsigned long long)seq);
+            std::fprintf(f, "latency_samples,%llu\n",
+                         (unsigned long long)all.count());
+            std::fprintf(f, "tsc_migrations,%llu\n",
+                         (unsigned long long)tsc_migrations);
+            std::fprintf(f, "tsc_ticks_per_ns,%.6f\n", clk.ticks_per_ns);
+            std::fprintf(f, "tsc_overhead_ticks,%llu\n",
+                         (unsigned long long)tsc_overhead);
             std::fprintf(f, "p50_all_ns,%.0f\n", all.percentile(0.50));
             std::fprintf(f, "p99_all_ns,%.0f\n", all.percentile(0.99));
             if (is_simd) {

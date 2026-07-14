@@ -37,7 +37,7 @@ ENGINE_LABEL = {
 ENGINE_LONG = {
     'simd': 'Direct-indexed + SIMD',
     'map':  'std::map reference',
-    'hw':   'SystemVerilog @ 250 MHz',
+    'hw':   'SystemVerilog @ 100 MHz',
 }
 
 BID = '#059669'   # emerald-600

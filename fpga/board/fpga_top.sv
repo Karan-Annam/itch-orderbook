@@ -66,17 +66,18 @@ module fpga_top #(
   BUFG u_bufg (.I(clk_core_unbuf), .O(clk_core));
 `endif
 
-  // ---------------- reset: async assert, sync release ----------------
-  logic [1:0] rst_sync_q;
+  // ---------------- reset: fully synchronous inside the core domain --------
+  // FPGA configuration initializes this pipe to zero. Keeping the distributed
+  // reset synchronous prevents asynchronously-reset state from feeding BRAM
+  // address/control pins, which Vivado flags as a possible corruption hazard.
+  logic [2:0] rst_sync_q;
   (* max_fanout = 256 *) logic rst_n;
-  always_ff @(posedge clk_core or negedge rstn_in) begin
-    if (!rstn_in) begin
-      rst_sync_q <= 2'b00;
-      rst_n      <= 1'b0;
-    end else begin
-      rst_sync_q <= {rst_sync_q[0], mmcm_locked};
-      rst_n      <= rst_sync_q[1];
-    end
+  assign rst_n = rst_sync_q[2];
+  always_ff @(posedge clk_core) begin
+    if (!rstn_in || !mmcm_locked)
+      rst_sync_q <= '0;
+    else
+      rst_sync_q <= {rst_sync_q[1:0], 1'b1};
   end
 
   // ---------------- bridge + core ----------------
@@ -151,7 +152,7 @@ module fpga_top #(
   // ---------------- LEDs ----------------
   logic [26:0] hb_q;
   logic [22:0] rx_stretch_q, tx_stretch_q;
-  always_ff @(posedge clk_core or negedge rst_n) begin
+  always_ff @(posedge clk_core) begin
     if (!rst_n) begin
       hb_q <= '0; rx_stretch_q <= '0; tx_stretch_q <= '0;
     end else begin

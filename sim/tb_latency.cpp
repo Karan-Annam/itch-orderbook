@@ -1,16 +1,17 @@
 // tb_latency.cpp — RTL per-message latency measurement via Verilator.
 //
 // Replays a project-format ITCH file through Verilated orderbook_top and
-// records the cycles consumed per message (commit-to-commit), converted to
-// nanoseconds at a user-set clock frequency. Emits:
-//   latency_hw_<Type>.csv  — per-type histograms (same schema as SW CSVs)
+// records cycle counts directly. A user-set clock is metadata used only for
+// throughput conversion. Emits:
+//   latency_hw_<Type>.csv  — pipeline-latency cycle histograms
 //   latency_hw_all.csv     — aggregated histogram
+//   latency_hw_service.csv — commit-to-commit cycle histogram
 //   perf_counters_hw.csv   — RTL hardware perf counter final values
 //
 // Usage:
 //   tb_latency <itch_file> [--csv DIR] [--mhz F] [--max N] [--quiet]
 //
-//   --mhz F  Clock frequency for cycle-to-ns conversion (default 250 MHz).
+//   --mhz F  Implemented clock for throughput conversion (default 100 MHz).
 //   --max N  Stop after N messages (0 = all).
 //   --quiet  Suppress per-batch progress prints.
 #include "rtl_driver.hpp"
@@ -25,6 +26,7 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <map>
 
 using namespace obsim;
 
@@ -44,59 +46,54 @@ static int type_byte_to_idx(uint8_t c) {
     }
 }
 
-// ---- minimal latency histogram (same output schema as LatencyHist) ---------
+// ---- exact sparse cycle histogram (no clipping/overflow bucket) ------------
 
 struct Hist {
-    static const int RANGE = 4000;   // 4 µs max — RTL is deterministic & fast
-    uint64_t bins[RANGE + 1];
-    uint64_t count;
-    double   sum_ns;
-    double   max_ns;
+    std::map<uint64_t, uint64_t> bins;
+    uint64_t count = 0;
+    uint64_t sum_cycles = 0;
+    uint64_t max_cycles = 0;
 
-    Hist() : count(0), sum_ns(0.0), max_ns(0.0) {
-        for (int i = 0; i <= RANGE; ++i) bins[i] = 0;
-    }
-
-    void record(double ns) {
-        if (ns < 0) ns = 0;
-        int idx = (ns >= RANGE) ? RANGE : static_cast<int>(ns);
-        ++bins[idx];
+    void record(uint64_t cycles) {
+        ++bins[cycles];
         ++count;
-        sum_ns += ns;
-        if (ns > max_ns) max_ns = ns;
+        sum_cycles += cycles;
+        if (cycles > max_cycles) max_cycles = cycles;
     }
 
-    double percentile(double p) const {
-        if (!count) return 0.0;
+    uint64_t percentile(double p) const {
+        if (!count) return 0;
         uint64_t target = static_cast<uint64_t>(std::ceil(p * static_cast<double>(count)));
         uint64_t cum = 0;
-        for (int i = 0; i <= RANGE; ++i) {
-            cum += bins[i];
-            if (cum >= target) return static_cast<double>(i);
+        for (const auto& [cycles, n] : bins) {
+            cum += n;
+            if (cum >= target) return cycles;
         }
-        return static_cast<double>(RANGE);
+        return bins.empty() ? 0 : bins.rbegin()->first;
     }
 
     void print(const char* label) const {
         if (!count) return;
         std::printf(
-            "  %-22s n=%-9llu  p50=%6.0f  p95=%6.0f  p99=%6.0f  p99.9=%6.0f  "
-            "p99.99=%6.0f  max=%7.0f  mean=%6.1f  (ns)\n",
+            "  %-22s n=%-9llu  p50=%6llu  p95=%6llu  p99=%6llu  p99.9=%6llu  "
+            "p99.99=%6llu  max=%7llu  mean=%6.1f  (cycles)\n",
             label, (unsigned long long)count,
-            percentile(0.50), percentile(0.95), percentile(0.99),
-            percentile(0.999), percentile(0.9999), max_ns,
-            count ? sum_ns / count : 0.0);
+            (unsigned long long)percentile(0.50),
+            (unsigned long long)percentile(0.95),
+            (unsigned long long)percentile(0.99),
+            (unsigned long long)percentile(0.999),
+            (unsigned long long)percentile(0.9999),
+            (unsigned long long)max_cycles,
+            count ? double(sum_cycles) / double(count) : 0.0);
     }
 
-    // Same CSV schema as LatencyHist::write_csv: msg_type,latency_ns,count
     void write_csv(const char* path, const char* msg_type) const {
         FILE* f = std::fopen(path, "w");
         if (!f) return;
-        std::fprintf(f, "msg_type,latency_ns,count\n");
-        for (int i = 0; i <= RANGE; ++i)
-            if (bins[i])
-                std::fprintf(f, "%s,%d,%llu\n", msg_type, i,
-                             (unsigned long long)bins[i]);
+        std::fprintf(f, "msg_type,latency_cycles,count\n");
+        for (const auto& [cycles, n] : bins)
+            std::fprintf(f, "%s,%llu,%llu\n", msg_type,
+                         (unsigned long long)cycles, (unsigned long long)n);
         std::fclose(f);
     }
 };
@@ -108,7 +105,7 @@ int main(int argc, char** argv) {
 
     std::string itch_file;
     std::string csv_dir;
-    double mhz      = 250.0;
+    double mhz      = 100.0;
     size_t max_msgs = 0;
     bool   quiet    = false;
 
@@ -128,8 +125,6 @@ int main(int argc, char** argv) {
     }
     if (mhz <= 0) { std::fprintf(stderr, "invalid --mhz\n"); return 2; }
 
-    const double ns_per_cycle = 1000.0 / mhz;   // e.g. 4 ns at 250 MHz
-
     // ---- load + split -------------------------------------------------------
     std::vector<uint8_t> raw = read_itch_file(itch_file);
     if (raw.empty()) {
@@ -145,8 +140,8 @@ int main(int argc, char** argv) {
     for (size_t k = 0; k < msgs.size(); ++k)
         frame_len[k] = 2 + msgs[k].body.size();
 
-    std::printf("tb_latency: %zu messages from %s  |  %.0f MHz (%.2f ns/cyc)\n",
-                msgs.size(), itch_file.c_str(), mhz, ns_per_cycle);
+    std::printf("tb_latency: %zu messages from %s  |  implemented clock %.0f MHz\n",
+                msgs.size(), itch_file.c_str(), mhz);
 
     // ---- drive RTL ----------------------------------------------------------
     RtlDriver drv;
@@ -168,25 +163,28 @@ int main(int argc, char** argv) {
     //   service time     = commit - prev commit   (1/throughput)
     auto on_msg = [&](uint64_t idx, uint64_t first_cyc, uint64_t ingest_cyc,
                       uint64_t commit_cyc) {
-        const double lat_ns = ingest_cyc
-            ? static_cast<double>(commit_cyc - ingest_cyc) * ns_per_cycle : 0.0;
-        const double e2e_ns = first_cyc
-            ? static_cast<double>(commit_cyc - first_cyc) * ns_per_cycle : 0.0;
-        const double svc_ns =
-            static_cast<double>(commit_cyc - prev_commit_cyc) * ns_per_cycle;
+        const uint64_t lat_cycles = ingest_cyc ? commit_cyc - ingest_cyc : 0;
+        const uint64_t e2e_cycles = first_cyc ? commit_cyc - first_cyc : 0;
+        const uint64_t svc_cycles = commit_cyc - prev_commit_cyc;
         prev_commit_cyc = commit_cyc;
 
         const uint8_t tbyte = msgs[idx].body.empty() ? 0 : msgs[idx].body[0];
         const int tidx = type_byte_to_idx(tbyte);
-        if (tidx >= 0) { hist_type[tidx].record(lat_ns); hist_e2e_type[tidx].record(e2e_ns); }
-        hist_all.record(lat_ns);
-        hist_e2e_all.record(e2e_ns);
-        hist_service.record(svc_ns);
+        if (tidx >= 0) {
+            hist_type[tidx].record(lat_cycles);
+            hist_e2e_type[tidx].record(e2e_cycles);
+        }
+        hist_all.record(lat_cycles);
+        hist_e2e_all.record(e2e_cycles);
+        hist_service.record(svc_cycles);
 
         if (!quiet && idx > 0 && (idx % 5000 == 0))
-            std::printf("  [%8llu] total_cyc=%llu  latency_ns=%.1f  e2e_ns=%.1f  service_ns=%.1f\n",
+            std::printf("  [%8llu] total=%llu  pipeline=%llu  e2e=%llu  service=%llu cycles\n",
                         (unsigned long long)idx,
-                        (unsigned long long)drv.cycles(), lat_ns, e2e_ns, svc_ns);
+                        (unsigned long long)drv.cycles(),
+                        (unsigned long long)lat_cycles,
+                        (unsigned long long)e2e_cycles,
+                        (unsigned long long)svc_cycles);
     };
 
     const uint64_t committed = drv.drive_latency(stream, frame_len, on_msg);
@@ -203,7 +201,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- print histograms ---------------------------------------------------
-    std::printf("\n==== RTL pipeline latency — ingest excluded (ns at %.0f MHz) ====\n", mhz);
+    std::printf("\n==== RTL pipeline latency — ingest excluded (cycles) ====\n");
     std::printf("     (cycles from a message's last input byte to its commit;\n"
                 "      ingest overlaps the previous message, so this includes\n"
                 "      any wait for the engine to free up)\n");
@@ -265,22 +263,28 @@ int main(int argc, char** argv) {
             std::string p = csv_dir + "/latency_hw_e2e_all.csv";
             hist_e2e_all.write_csv(p.c_str(), "ALL");
         }
+        {
+            std::string p = csv_dir + "/latency_hw_service.csv";
+            hist_service.write_csv(p.c_str(), "SERVICE");
+        }
 
         std::string pc = csv_dir + "/perf_counters_hw.csv";
         if (FILE* f = std::fopen(pc.c_str(), "w")) {
-            const double svc_p50 = hist_service.percentile(0.50);
-            const double thru_msg_s = (svc_p50 > 0) ? 1e9 / svc_p50 : 0.0;
+            const uint64_t svc_p50 = hist_service.percentile(0.50);
+            const double thru_msg_s = svc_p50 ? mhz * 1e6 / double(svc_p50) : 0.0;
             std::fprintf(f, "counter,value\n");
             std::fprintf(f, "messages,%llu\n",          (unsigned long long)committed);
             std::fprintf(f, "total_cycles,%llu\n",      (unsigned long long)drv.cycles());
-            std::fprintf(f, "mhz,%.0f\n",               mhz);
-            // p50/p99_all_ns are now TRUE pipeline latency (ingest excluded).
-            std::fprintf(f, "p50_all_ns,%.0f\n",        hist_all.percentile(0.50));
-            std::fprintf(f, "p99_all_ns,%.0f\n",        hist_all.percentile(0.99));
-            std::fprintf(f, "p9999_all_ns,%.0f\n",      hist_all.percentile(0.9999));
-            std::fprintf(f, "e2e_p50_ns,%.0f\n",        hist_e2e_all.percentile(0.50));
-            std::fprintf(f, "e2e_p99_ns,%.0f\n",        hist_e2e_all.percentile(0.99));
-            std::fprintf(f, "service_p50_ns,%.0f\n",    svc_p50);
+            std::fprintf(f, "clock_mhz,%.0f\n",         mhz);
+            std::fprintf(f, "pipeline_p50_cycles,%llu\n", (unsigned long long)hist_all.percentile(0.50));
+            std::fprintf(f, "pipeline_p99_cycles,%llu\n", (unsigned long long)hist_all.percentile(0.99));
+            std::fprintf(f, "pipeline_p999_cycles,%llu\n", (unsigned long long)hist_all.percentile(0.999));
+            std::fprintf(f, "e2e_p50_cycles,%llu\n",    (unsigned long long)hist_e2e_all.percentile(0.50));
+            std::fprintf(f, "e2e_p99_cycles,%llu\n",    (unsigned long long)hist_e2e_all.percentile(0.99));
+            std::fprintf(f, "e2e_p999_cycles,%llu\n",   (unsigned long long)hist_e2e_all.percentile(0.999));
+            std::fprintf(f, "service_p50_cycles,%llu\n", (unsigned long long)svc_p50);
+            std::fprintf(f, "service_p99_cycles,%llu\n", (unsigned long long)hist_service.percentile(0.99));
+            std::fprintf(f, "service_p999_cycles,%llu\n", (unsigned long long)hist_service.percentile(0.999));
             std::fprintf(f, "throughput_msg_s,%.0f\n",  thru_msg_s);
             std::fprintf(f, "add_cycles,%llu\n",         (unsigned long long)top->add_cycles);
             std::fprintf(f, "delete_cycles,%llu\n",      (unsigned long long)top->delete_cycles);

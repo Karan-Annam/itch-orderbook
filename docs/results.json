@@ -1,0 +1,101 @@
+{
+  "book_benchmark": {
+    "direct_index_simd": {
+      "elapsed_ms": 61.3,
+      "million_messages_per_second": 8.15,
+      "ns_per_message": 122.7
+    },
+    "simd_tier": "AVX2 (cmpeq_epi8, 32B)",
+    "speedup_x": 1.7,
+    "std_map": {
+      "elapsed_ms": 104.1,
+      "million_messages_per_second": 4.8,
+      "ns_per_message": 208.1
+    }
+  },
+  "fpga_route": {
+    "bitstream_bytes": 2192116,
+    "bitstream_generated": true,
+    "bram_async_reset_warnings": 0,
+    "drc_warning_count": 2,
+    "resources": {
+      "bram_tiles": {
+        "available": 75.0,
+        "percent": 20.67,
+        "used": 15.5
+      },
+      "dsp": {
+        "available": 120.0,
+        "percent": 5.0,
+        "used": 6.0
+      },
+      "ff": {
+        "available": 65200.0,
+        "percent": 6.94,
+        "used": 4523.0
+      },
+      "lut": {
+        "available": 32600.0,
+        "percent": 24.6,
+        "used": 8019.0
+      }
+    },
+    "routing_error_nets": 0,
+    "status": "generated",
+    "target_mhz": 100.0,
+    "timing_met": true,
+    "wns_ns": 0.058
+  },
+  "generated_utc": "2026-07-14T23:42:08+00:00",
+  "host": {
+    "machine": "AMD64",
+    "processor": "Intel64 Family 6 Model 170 Stepping 4, GenuineIntel",
+    "system": "Windows"
+  },
+  "rtl_cycle_accurate": {
+    "add_cycles": 80928,
+    "clock_mhz": 100,
+    "delete_cycles": 50582,
+    "e2e_p50_cycles": 55,
+    "e2e_p999_cycles": 173,
+    "e2e_p99_cycles": 91,
+    "hash_probe_1": 10169,
+    "hash_probe_2": 0,
+    "hash_probe_gt2": 0,
+    "ingest_stall_cycles": 264822,
+    "messages": 20000,
+    "msg_total": 20000,
+    "pipeline_p50_cycles": 44,
+    "pipeline_p999_cycles": 96,
+    "pipeline_p99_cycles": 78,
+    "replace_cycles": 54272,
+    "scan_count": 6,
+    "scan_cycles_total": 9000,
+    "service_p50_cycles": 19,
+    "service_p999_cycles": 27,
+    "service_p99_cycles": 27,
+    "throughput_msg_s": 5263158,
+    "total_cycles": 310277,
+    "trade_count": 4276
+  },
+  "software": {
+    "add": 89862,
+    "cancel": 23756,
+    "delete": 24151,
+    "exec": 34268,
+    "latency_samples": 200004,
+    "messages": 200004,
+    "p50_all_ns": 203,
+    "p99_all_ns": 527,
+    "replace": 19963,
+    "trade": 8000,
+    "tsc_migrations": 0,
+    "tsc_overhead_ticks": 64,
+    "tsc_ticks_per_ns": 3.072068,
+    "vwap_units": 574883
+  },
+  "workload": {
+    "rtl_messages": 20000,
+    "software_messages": 200004
+  }
+}
