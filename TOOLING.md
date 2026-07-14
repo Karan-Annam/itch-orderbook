@@ -16,9 +16,8 @@ matplotlib missing from the ucrt64 Python) are in
 
 ## AI use
 
-I wrote the RTL and the software side with AI assistance, then debugged it
-myself and read through it to modify things, especially once the hardware
-started diverging from the C++ reference model on real traffic and needed
-actual fixes, not just re-generation.
-
-Ask if you want to go deeper on any part of the pipeline.
+AI-assisted tools were used for implementation support, debugging, and
+documentation. I reviewed and modified the resulting RTL and C++ code and
+validated them with software tests, RTL simulation, and differential checking
+against the reference model. Debugging included resolving hardware/software
+divergence observed during real-traffic replay.

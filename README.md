@@ -162,8 +162,7 @@ instrumented run against `dsl.refengine.run` exactly before writing anything).
 
 Beyond [DESIGN.md](docs/DESIGN.md): a full technical study doc
 ([docs/TECH_DEEP_DIVE.md](docs/TECH_DEEP_DIVE.md) — data structures, framer,
-overlap, both bug post-mortems, all measured numbers), an interview-style
-Q&A ([docs/INTERVIEW_QA.md](docs/INTERVIEW_QA.md)), and the current state +
+overlap, both bug post-mortems, all measured numbers) and the current state +
 roadmap ([docs/STATE_AND_ROADMAP.md](docs/STATE_AND_ROADMAP.md)).
 
 ## Layout
@@ -216,5 +215,7 @@ enter the RTL pipeline.
 
 ## AI Use and Tooling
 
-These docs were drafted with AI assistance and edited by me. Code-level AI
-use and the build toolchain are in [TOOLING.md](TOOLING.md).
+AI-assisted tools were used for implementation support, debugging, and
+documentation. I reviewed and modified the resulting RTL and C++ code and
+validated the design with software tests, RTL simulation, and differential
+checking. Build details and development notes are in [TOOLING.md](TOOLING.md).

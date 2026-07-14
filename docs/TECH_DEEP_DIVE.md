@@ -1,9 +1,8 @@
 # Technical Deep Dive — ITCH Order Book, C++ and RTL
 
-The "understand every line" study document. Complements [DESIGN.md](DESIGN.md)
-(the narrative) with the structural detail an interviewer will drill into.
-Companion docs: [INTERVIEW_QA.md](INTERVIEW_QA.md),
-[STATE_AND_ROADMAP.md](STATE_AND_ROADMAP.md).
+Detailed implementation and verification notes that complement
+[DESIGN.md](DESIGN.md) with structural detail. Current status and planned work
+are tracked in [STATE_AND_ROADMAP.md](STATE_AND_ROADMAP.md).
 
 ---
 
