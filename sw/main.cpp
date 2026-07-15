@@ -174,6 +174,7 @@ int main(int argc, char** argv) {
     const size_t   len  = rx.size();
     size_t o = 0;
     uint64_t seq = 0;
+    uint64_t malformed_messages = 0;
     uint64_t tsc_migrations = 0;
     const uint64_t tsc_overhead = tsc_sample_overhead();
 
@@ -190,6 +191,7 @@ int main(int argc, char** argv) {
         // otherwise simd would be charged for stats work that map never runs.
         const TscSample t0 = tsc_sample();
         DecodedMessage m = ItchParser::decode_body(body, blen);
+        if (m.type == MsgType::Unknown) ++malformed_messages;
         BookEngine::ExecResult ex;
         if (is_simd) {
             engine->apply(m, &ex);
@@ -204,9 +206,11 @@ int main(int argc, char** argv) {
             const uint64_t elapsed = t1.ticks - t0.ticks;
             const double ns = clk.to_ns(elapsed > tsc_overhead
                                             ? elapsed - tsc_overhead : 0);
-            const int idx = msg_type_idx(m.type);
-            hist[idx].record(ns);
-            all.record(ns);
+            if (m.type != MsgType::Unknown) {
+                const int idx = msg_type_idx(m.type);
+                hist[idx].record(ns);
+                all.record(ns);
+            }
         } else {
             ++tsc_migrations;
         }
@@ -283,6 +287,7 @@ int main(int argc, char** argv) {
 
         o += 2 + blen;
     }
+    const bool truncated_stream = (o != len);
     if (depth_csv)  std::fclose(depth_csv);
     if (ladder_csv) std::fclose(ladder_csv);
 
@@ -308,6 +313,11 @@ int main(int argc, char** argv) {
                     "(Linux-only; tail latency above reflects cache/OS jitter)\n");
     }
 
+    std::printf("\n==== stream integrity ====\n");
+    std::printf("  malformed=%llu truncated=%d\n",
+                (unsigned long long)malformed_messages,
+                truncated_stream ? 1 : 0);
+
     if (is_simd) {
         const auto& c = engine->counters();
         std::printf("\n==== message counts ====\n");
@@ -317,6 +327,13 @@ int main(int argc, char** argv) {
                     (unsigned long long)c.cancel, (unsigned long long)c.del,
                     (unsigned long long)c.replace, (unsigned long long)c.trade,
                     (unsigned long long)c.sys);
+        std::printf("  integrity: invalid=%llu duplicate_ref=%llu missing_ref=%llu "
+                    "table_full=%llu resync_required=%llu\n",
+                    (unsigned long long)c.invalid,
+                    (unsigned long long)c.duplicate_ref,
+                    (unsigned long long)c.missing_ref,
+                    (unsigned long long)c.ref_insert_fail,
+                    (unsigned long long)c.resync_required);
 
         std::printf("\n==== order-ref hash table ====\n");
         const auto& hs = engine->refs().stats();
@@ -360,6 +377,19 @@ int main(int argc, char** argv) {
     std::printf("  total messages processed: %llu\n", (unsigned long long)seq);
     std::printf("  latency samples dropped after core migration: %llu\n",
                 (unsigned long long)tsc_migrations);
+
+    bool replay_ok = !malformed_messages && !truncated_stream;
+    if (is_simd) {
+        const auto& c = engine->counters();
+        replay_ok = replay_ok && !c.invalid && !c.duplicate_ref &&
+                    !c.missing_ref && !c.ref_insert_fail && !c.resync_required;
+    }
+    if (!replay_ok) {
+        std::fprintf(stderr,
+                     "[error] replay was incomplete; final-state and CSV outputs "
+                     "were suppressed because they must not be trusted\n");
+        return 3;
+    }
 
     // --final-state: one machine-readable line for diffing against the RTL
     // banded replay and the hardware snapshot (tools/run_real_data.sh,
@@ -414,6 +444,15 @@ int main(int argc, char** argv) {
                 std::fprintf(f, "delete,%llu\n",  (unsigned long long)c.del);
                 std::fprintf(f, "replace,%llu\n", (unsigned long long)c.replace);
                 std::fprintf(f, "trade,%llu\n",   (unsigned long long)c.trade);
+                std::fprintf(f, "invalid,%llu\n", (unsigned long long)c.invalid);
+                std::fprintf(f, "duplicate_ref,%llu\n",
+                             (unsigned long long)c.duplicate_ref);
+                std::fprintf(f, "missing_ref,%llu\n",
+                             (unsigned long long)c.missing_ref);
+                std::fprintf(f, "ref_insert_fail,%llu\n",
+                             (unsigned long long)c.ref_insert_fail);
+                std::fprintf(f, "resync_required,%llu\n",
+                             (unsigned long long)c.resync_required);
                 std::fprintf(f, "vwap_units,%u\n", stats.vwap_units());
             }
             std::fclose(f);

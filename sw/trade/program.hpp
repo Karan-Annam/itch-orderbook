@@ -53,6 +53,9 @@ enum StateKind : int32_t {
 };
 
 constexpr uint32_t VM_MAX_STACK = 32;
+constexpr uint32_t VM_MAX_CODE = 6144;
+constexpr uint32_t VM_MAX_STATE_FLOATS = 8192;
+constexpr uint32_t VM_MAX_WINDOW = 4096;
 constexpr uint32_t N_SERIES = 5;   // open high low close volume
 constexpr uint32_t N_CTX = 4;      // bar_index position entry_price equity
 

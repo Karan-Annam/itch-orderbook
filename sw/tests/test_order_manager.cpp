@@ -180,6 +180,30 @@ static void test_stop_on_trade_print() {
     CHECK_EQ(s.om->trades()[0].reason, RSN_STOP);
 }
 
+static void test_protective_exit_cancels_partial_entry() {
+    OmConfig cfg;
+    cfg.equity0 = 500000.0f;              // passive entry requests 100 shares
+    cfg.fee = 0.0f;
+    OmSim s = make_two_sided(cfg);
+    Signals el = sig_el();
+    el.stop = 0.01f;
+    s.bar(5005, el);
+    CHECK_EQ(s.working()->remaining, 100u);
+
+    s.add(30, 'B', 5000, 100);            // behind our resting order
+    s.exec(30, 40);                       // price-through model fills 40
+    CHECK_EQ(s.om->position(), 1);
+    CHECK_EQ(s.working()->remaining, 60u);
+
+    s.add(31, 'B', 4900, 100);
+    s.exec(31, 10);                       // fills 10 more, then triggers exit
+    CHECK_EQ(s.om->position(), 0);
+    CHECK(s.working() == nullptr);        // no ghost entry remains
+    CHECK_EQ(s.om->trades().size(), 1u);
+    CHECK_EQ(s.om->trades()[0].reason, RSN_STOP);
+    CHECK_EQ((int)s.om->trades()[0].qty, 50);
+}
+
 static void test_trail_advances_with_prints() {
     OmConfig cfg;
     cfg.equity0 = 100000.0f;
@@ -295,6 +319,7 @@ void run_order_manager_tests() {
     RUN_TEST(test_cross_entry_fills_and_signal_exit);
     RUN_TEST(test_fee_arithmetic);
     RUN_TEST(test_stop_on_trade_print);
+    RUN_TEST(test_protective_exit_cancels_partial_entry);
     RUN_TEST(test_trail_advances_with_prints);
     RUN_TEST(test_take_profit);
     RUN_TEST(test_short_side_stop);

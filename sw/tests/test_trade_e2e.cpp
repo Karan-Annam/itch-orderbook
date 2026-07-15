@@ -86,8 +86,35 @@ static void test_e2e_deterministic() {
     CHECK(a.final_equity == b.final_equity);
 }
 
+static void test_session_reports_malformed_and_truncated_input() {
+    Program prog = Program::load("data/strategies/sma_cross.obp");
+    SessionConfig sc;
+
+    std::vector<uint8_t> malformed{0, 0};  // zero-length body
+    std::vector<uint8_t> valid = gen_stream(20);
+    malformed.insert(malformed.end(), valid.begin(), valid.end());
+    SessionResult a = run_session(malformed.data(), malformed.size(), prog, sc);
+    CHECK_EQ(a.malformed_messages, 1u);
+    CHECK(!a.truncated_stream);
+
+    valid.pop_back();
+    SessionResult b = run_session(valid.data(), valid.size(), prog, sc);
+    CHECK(b.truncated_stream);
+
+    bool threw = false;
+    try {
+        SessionConfig bad;
+        bad.bar_ns = 0;
+        (void)run_session(valid.data(), valid.size(), prog, bad);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);
+}
+
 void run_trade_e2e_tests() {
     RUN_TEST(test_e2e_join_golden);
     RUN_TEST(test_e2e_cross_mode);
     RUN_TEST(test_e2e_deterministic);
+    RUN_TEST(test_session_reports_malformed_and_truncated_input);
 }

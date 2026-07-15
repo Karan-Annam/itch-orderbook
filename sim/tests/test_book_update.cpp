@@ -78,6 +78,18 @@ int main(int argc, char** argv) {
     SCHECK(ctx, top->scan_count >= 2, "expected >=2 best-price scans, got %llu",
            (unsigned long long)top->scan_count);
 
+    // A duplicate Add must not overwrite the reference or double-count depth.
+    std::vector<uint8_t> duplicate;
+    append(duplicate, add(7, 'B', 50, 99960, 1));
+    uint64_t dup_committed = run_stream(drv, duplicate, 1, [&](uint64_t){});
+    SCHECK(ctx, dup_committed == 1, "duplicate Add did not commit");
+    SCHECK(ctx, top->best_bid_price == 99950 && top->best_bid_shares == 500,
+           "duplicate Add changed best bid to %u(%u)",
+           (unsigned)top->best_bid_price, (unsigned)top->best_bid_shares);
+    SCHECK(ctx, top->tot_bid_vol == 700,
+           "duplicate Add changed total bid volume to %llu",
+           (unsigned long long)top->tot_bid_vol);
+
     std::printf("[book_update] %d checks, %d failures (scans=%llu)\n",
                 ctx.checks, ctx.fails, (unsigned long long)top->scan_count);
     return ctx.fails ? 1 : 0;

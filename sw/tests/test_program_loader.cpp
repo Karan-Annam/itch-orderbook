@@ -113,6 +113,29 @@ static void test_stack_limit() {
     CHECK(rejects(b, "max_stack"));
 }
 
+static void test_stack_underflow() {
+    Builder b = minimal_blob();
+    size_t off = 4 + 8 * 4;  // op[0]
+    uint32_t word = enc(OP_ADD);
+    for (int i = 0; i < 4; ++i) b.buf[off + i] = (word >> (8 * i)) & 0xFF;
+    CHECK(rejects(b, "stack underflow"));
+}
+
+static void test_declared_stack_must_match() {
+    Builder b = minimal_blob();
+    patch_header_u32(b, 7, 1);  // actual maximum is two values
+    CHECK(rejects(b, "does not match"));
+}
+
+static void test_nonfinite_constant_rejected() {
+    Builder b = minimal_blob();
+    patch_header_u32(b, 2, 1);  // one const after code
+    const size_t off = 4 + 8 * 4 + 5 * 4;
+    const uint8_t inf[] = {0x00, 0x00, 0x80, 0x7f};
+    b.buf.insert(b.buf.begin() + off, inf, inf + 4);
+    CHECK(rejects(b, "not finite"));
+}
+
 static void test_empty_code() {
     Builder b;
     b.buf.insert(b.buf.end(), {'O', 'B', 'P', '1'});
@@ -186,7 +209,7 @@ static void test_valid_state_slot() {
     b.buf.insert(b.buf.end(), {'O', 'B', 'P', '1'});
     b.u32(1); b.u32(3); b.u32(0); b.u32(1); b.u32(0); b.u32(0);
     b.u32(9);   // state_floats == 1 + cap
-    b.u32(2);
+    b.u32(1);
     b.u32(enc(OP_PUSH_SERIES, 3));
     b.u32(enc(OP_SIG_EL));
     b.u32(enc(OP_HALT));
@@ -239,6 +262,9 @@ void run_program_loader_tests() {
     RUN_TEST(test_truncated);
     RUN_TEST(test_trailing_bytes);
     RUN_TEST(test_stack_limit);
+    RUN_TEST(test_stack_underflow);
+    RUN_TEST(test_declared_stack_must_match);
+    RUN_TEST(test_nonfinite_constant_rejected);
     RUN_TEST(test_empty_code);
     RUN_TEST(test_bad_opcode);
     RUN_TEST(test_operand_range_checks);

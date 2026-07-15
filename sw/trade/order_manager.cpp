@@ -84,19 +84,25 @@ void OrderManager::on_trade_print(uint32_t price, uint64_t ts) {
     if (side_ > 0) {
         if (px > anchor_) anchor_ = px;
         if (cfg_stop_ > 0.0f && px <= entry_vwap * (1.0f - cfg_stop_)) {
+            cancel_working_entry();
             submit_exit(RSN_STOP, ts);
         } else if (cfg_trail_ > 0.0f && px <= anchor_ * (1.0f - cfg_trail_)) {
+            cancel_working_entry();
             submit_exit(RSN_TRAIL, ts);
         } else if (cfg_tp_ > 0.0f && px >= entry_vwap * (1.0f + cfg_tp_)) {
+            cancel_working_entry();
             submit_exit(RSN_TP, ts);
         }
     } else {
         if (px < anchor_) anchor_ = px;
         if (cfg_stop_ > 0.0f && px >= entry_vwap * (1.0f + cfg_stop_)) {
+            cancel_working_entry();
             submit_exit(RSN_STOP, ts);
         } else if (cfg_trail_ > 0.0f && px >= anchor_ * (1.0f + cfg_trail_)) {
+            cancel_working_entry();
             submit_exit(RSN_TRAIL, ts);
         } else if (cfg_tp_ > 0.0f && px <= entry_vwap * (1.0f - cfg_tp_)) {
+            cancel_working_entry();
             submit_exit(RSN_TP, ts);
         }
     }

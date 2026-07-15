@@ -18,6 +18,7 @@
 #include "program.hpp"
 
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 namespace ob::trade {
@@ -40,10 +41,14 @@ struct SessionResult {
     int maker_fills = 0, taker_fills = 0;
     int wins = 0;
     uint64_t messages = 0;
+    uint64_t malformed_messages = 0;
+    bool truncated_stream = false;
+    BookEngine::Counters book_counters;
 };
 
 inline SessionResult run_session(const uint8_t* data, size_t len,
                                  const Program& prog, const SessionConfig& sc) {
+    if (sc.bar_ns == 0) throw std::invalid_argument("bar_ns must be positive");
     BookEngine eng;
     FillEngine fe(eng, sc.locate);
     OrderManager om(fe, eng, sc.locate, sc.om);
@@ -73,6 +78,10 @@ inline SessionResult run_session(const uint8_t* data, size_t len,
 
         DecodedMessage m = ItchParser::decode_body(body, blen);
         ++res.messages;
+        if (m.type == MsgType::Unknown) {
+            ++res.malformed_messages;
+            continue;
+        }
         last_ts = m.timestamp;
 
         fe.on_market_message(m);
@@ -86,12 +95,14 @@ inline SessionResult run_session(const uint8_t* data, size_t len,
                 process_bars(m.timestamp);
         }
     }
+    res.truncated_stream = (o != len);
     if (bb.flush() > 0) process_bars(last_ts);
     om.finish(last_ts);
 
     res.bars = bb.bars();
     res.trades = om.trades();
     res.fills = om.fills();
+    res.book_counters = eng.counters();
     for (const FillRec& f : res.fills) (f.maker ? res.maker_fills : res.taker_fills)++;
     for (const TradeRecT& t : res.trades) if (t.pnl > 0.0f) res.wins++;
 

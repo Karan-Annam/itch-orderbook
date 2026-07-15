@@ -96,11 +96,98 @@ static void test_replace_heavy() {
     for (uint16_t loc = 1; loc <= 2; ++loc) { compare_tob(fast, ref, loc); compare_full(fast, ref, loc); }
 }
 
+static DecodedMessage add_msg(uint64_t ref, uint32_t price, uint32_t shares,
+                              char side = SIDE_BUY) {
+    DecodedMessage m;
+    m.type = MsgType::AddOrder;
+    m.stock_locate = 1;
+    m.order_ref = ref;
+    m.price = price;
+    m.shares = shares;
+    m.side = side;
+    return m;
+}
+
+static void test_out_of_range_add_is_atomic() {
+    BookEngine fast;
+    CHECK(fast.apply(add_msg(1, 1'000'000, 10)) == nullptr);
+    CHECK(fast.refs().find(1) == nullptr);
+    CHECK(fast.book(1) == nullptr);
+    CHECK_EQ((int)fast.last_status(), (int)BookEngine::ApplyStatus::InvalidEvent);
+    CHECK_EQ(fast.counters().invalid, 1u);
+}
+
+static void test_full_ref_table_is_atomic() {
+    BookEngine fast(100, 1);
+    CHECK(fast.apply(add_msg(1, 10, 10)) != nullptr);
+    CHECK(fast.apply(add_msg(2, 11, 20)) == nullptr);
+    const OrderBook* b = fast.book(1);
+    CHECK(b != nullptr);
+    CHECK_EQ(b->bid_shares_at(10), 10u);
+    CHECK_EQ(b->bid_shares_at(11), 0u);
+    CHECK(fast.refs().find(2) == nullptr);
+    CHECK_EQ((int)fast.last_status(),
+             (int)BookEngine::ApplyStatus::ReferenceTableFull);
+}
+
+static void test_duplicate_add_preserves_original() {
+    BookEngine fast(100, 8);
+    CHECK(fast.apply(add_msg(7, 10, 10)) != nullptr);
+    CHECK(fast.apply(add_msg(7, 11, 20)) == nullptr);
+    const OrderBook* b = fast.book(1);
+    const auto* ref = fast.refs().find(7);
+    CHECK(ref != nullptr);
+    CHECK_EQ(ref->price, 10u);
+    CHECK_EQ(ref->shares, 10u);
+    CHECK_EQ(b->bid_shares_at(10), 10u);
+    CHECK_EQ(b->bid_shares_at(11), 0u);
+    CHECK_EQ((int)fast.last_status(),
+             (int)BookEngine::ApplyStatus::DuplicateReference);
+}
+
+static void test_invalid_replace_preserves_old_order() {
+    BookEngine fast(100, 8);
+    CHECK(fast.apply(add_msg(7, 10, 10)) != nullptr);
+    DecodedMessage m;
+    m.type = MsgType::OrderReplace;
+    m.order_ref = 7;
+    m.new_order_ref = 8;
+    m.price = 100;  // valid indices are 0..99
+    m.shares = 20;
+    CHECK(fast.apply(m) == nullptr);
+    const auto* old = fast.refs().find(7);
+    CHECK(old != nullptr);
+    CHECK(fast.refs().find(8) == nullptr);
+    CHECK_EQ(old->price, 10u);
+    CHECK_EQ(fast.book(1)->bid_shares_at(10), 10u);
+    CHECK_EQ((int)fast.last_status(), (int)BookEngine::ApplyStatus::InvalidEvent);
+}
+
+static void test_oversized_reduce_is_rejected_atomically() {
+    BookEngine fast(1000, 32);
+    CHECK(fast.apply(add_msg(1, 100, 10)) != nullptr);
+
+    DecodedMessage exec;
+    exec.type = MsgType::OrderExecuted;
+    exec.order_ref = 1;
+    exec.shares = 11;
+    CHECK(fast.apply(exec) == nullptr);
+    CHECK(fast.last_status() == BookEngine::ApplyStatus::InvalidEvent);
+    CHECK(fast.refs().find(1) != nullptr);
+    CHECK_EQ(fast.refs().find(1)->shares, 10u);
+    CHECK_EQ(fast.book(1)->bid_shares_at(100), 10u);
+}
+
 void run_book_engine_tests() {
     RUN_TEST(test_diff_single_symbol);
     RUN_TEST(test_diff_multi_symbol);
     RUN_TEST(test_diff_alt_seed);
     RUN_TEST(test_replace_heavy);
+    RUN_TEST(test_out_of_range_add_is_atomic);
+    RUN_TEST(test_full_ref_table_is_atomic);
+    RUN_TEST(test_duplicate_add_preserves_original);
+    RUN_TEST(test_invalid_replace_preserves_old_order);
+    RUN_TEST(test_oversized_reduce_is_rejected_atomically);
 }
 
 #ifdef TEST_STANDALONE

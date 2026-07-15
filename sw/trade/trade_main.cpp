@@ -13,6 +13,7 @@
 #include "../util/itch_gen.hpp"
 
 #include <cstdio>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -85,6 +86,15 @@ Args parse_args(int argc, char** argv) {
     }
     if (a.strategy.empty() || (a.gen == 0 && a.file.empty())) usage(argv[0]);
     if (a.entry != "join" && a.entry != "cross") usage(argv[0]);
+    if (!a.file.empty() && a.gen != 0) usage(argv[0]);
+    if (!std::isfinite(a.bar_secs) || a.bar_secs < 1e-9 ||
+        a.bar_secs > double(UINT64_MAX) / 1e9 ||
+        !std::isfinite(a.fee) || a.fee < 0.0f ||
+        !std::isfinite(a.equity0) || a.equity0 <= 0.0f ||
+        a.symbol == 0 || a.aggress > 100 || a.ts_scale == 0)
+        usage(argv[0]);
+    for (const auto& param : a.params)
+        if (!std::isfinite(param.second)) usage(argv[0]);
     return a;
 }
 
@@ -183,6 +193,24 @@ int main(int argc, char** argv) {
                 a.entry.c_str(), sc.om.fee);
     std::printf("stream     %llu messages -> %d bars of %.3gs\n",
                 (unsigned long long)r.messages, r.bars.size(), a.bar_secs);
+    const auto& bc = r.book_counters;
+    std::printf("integrity  malformed=%llu truncated=%d invalid=%llu duplicate=%llu "
+                "missing=%llu table_full=%llu resync=%llu\n",
+                (unsigned long long)r.malformed_messages,
+                r.truncated_stream ? 1 : 0,
+                (unsigned long long)bc.invalid,
+                (unsigned long long)bc.duplicate_ref,
+                (unsigned long long)bc.missing_ref,
+                (unsigned long long)bc.ref_insert_fail,
+                (unsigned long long)bc.resync_required);
+    if (r.malformed_messages || r.truncated_stream || bc.invalid ||
+        bc.duplicate_ref || bc.missing_ref || bc.ref_insert_fail ||
+        bc.resync_required) {
+        std::fprintf(stderr,
+                     "[error] session replay was incomplete; trading results and "
+                     "CSV outputs were suppressed because they must not be trusted\n");
+        return 3;
+    }
     std::printf("fills      %d maker / %d taker\n", r.maker_fills, r.taker_fills);
     std::printf("trades     %zu (%d wins, %.1f%% win rate)\n", r.trades.size(),
                 r.wins, r.trades.empty() ? 0.0 : 100.0 * r.wins / r.trades.size());

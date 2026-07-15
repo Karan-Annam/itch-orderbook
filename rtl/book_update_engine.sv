@@ -6,9 +6,10 @@
 //
 // Banding: band_base auto-centers on the first Add (BAND_AUTO_INIT) and is
 // fixed for the session. Adds and replace-adds priced outside
-// [band_base, band_base+PRICE_LEVELS) are dropped whole (counted in
-// band_drops) before touching the table or counters, so the book never holds
-// partial state for them. Table lookups can only return in-window prices
+// [band_base, band_base+PRICE_LEVELS) are rejected before an Add touches the
+// table or counters. A Replace has already removed its old order before its
+// new price is checked, so an out-of-window replace is a cancel-only outcome.
+// Table lookups can only return in-window prices
 // because only in-window adds are ever inserted.
 //
 // Trade-event note: Execute(E) carries no price, so after the table lookup the
@@ -93,6 +94,7 @@ module book_update_engine
   // ---- order-ref table interface ------------------------------------------
   logic                tbl_cmd_valid;
   logic [1:0]          tbl_cmd_op;
+  logic                tbl_cmd_unique;
   logic [REF_W-1:0]    tbl_cmd_ref;
   logic [PRICE_W-1:0]  tbl_cmd_price;
   logic [SHARES_W-1:0] tbl_cmd_shares;
@@ -105,7 +107,8 @@ module book_update_engine
 
   order_ref_table u_tbl (
     .clk(clk), .rst(rst),
-    .cmd_valid(tbl_cmd_valid), .cmd_op(tbl_cmd_op), .cmd_ref(tbl_cmd_ref),
+    .cmd_valid(tbl_cmd_valid), .cmd_op(tbl_cmd_op),
+    .cmd_unique(tbl_cmd_unique), .cmd_ref(tbl_cmd_ref),
     .cmd_price(tbl_cmd_price), .cmd_shares(tbl_cmd_shares),
     .cmd_is_bid(tbl_cmd_is_bid), .cmd_locate(tbl_cmd_locate),
     .busy(tbl_busy), .done(tbl_done), .res_found(tbl_found),
@@ -242,6 +245,7 @@ module book_update_engine
       tot_ask_vol   <= '0;
       trade_valid   <= 1'b0;
       tbl_cmd_valid <= 1'b0;
+      tbl_cmd_unique<= 1'b0;
       bt_bid_add_en <= 1'b0; bt_ask_add_en <= 1'b0;
       bt_bid_empt_en<= 1'b0; bt_ask_empt_en<= 1'b0;
       is_replace_q  <= 1'b0;
@@ -259,6 +263,7 @@ module book_update_engine
       engine_done   <= 1'b0;
       trade_valid   <= 1'b0;
       tbl_cmd_valid <= 1'b0;
+      tbl_cmd_unique<= 1'b0;
       bt_bid_add_en <= 1'b0; bt_ask_add_en <= 1'b0;
       bt_bid_empt_en<= 1'b0; bt_ask_empt_en<= 1'b0;
 
@@ -304,6 +309,7 @@ module book_update_engine
           if (!tbl_req_q) begin
             tbl_cmd_valid  <= 1'b1;
             tbl_cmd_op     <= OP_INSERT;
+            tbl_cmd_unique <= 1'b1;
             tbl_cmd_ref    <= ref_q;
             tbl_cmd_price  <= op_price_q;
             tbl_cmd_shares <= op_shares_q;
@@ -312,8 +318,14 @@ module book_update_engine
             tbl_req_q      <= 1'b1;
           end else if (tbl_done) begin
             tbl_req_q  <= 1'b0;
-            lvl_addr_q <= LEVEL_AW'(op_price_q - band_base);
-            state      <= S_ADD_LVL;
+            if (tbl_found) begin
+              lvl_addr_q <= LEVEL_AW'(op_price_q - band_base);
+              state      <= S_ADD_LVL;
+            end else begin
+              // Duplicate reference or a full probe window: never create
+              // depth that has no corresponding reference-table entry.
+              state <= S_FINISH;
+            end
           end
         end
         S_ADD_LVL: begin
@@ -451,6 +463,7 @@ module book_update_engine
           if (!tbl_req_q) begin
             tbl_cmd_valid  <= 1'b1;
             tbl_cmd_op     <= OP_INSERT;
+            tbl_cmd_unique <= 1'b1;
             tbl_cmd_ref    <= new_ref_q;
             tbl_cmd_price  <= dec_price_q;
             tbl_cmd_shares <= dec_shares_q;
@@ -459,8 +472,14 @@ module book_update_engine
             tbl_req_q      <= 1'b1;
           end else if (tbl_done) begin
             tbl_req_q  <= 1'b0;
-            lvl_addr_q <= LEVEL_AW'(radd_off);
-            state      <= S_RADD_LVL;
+            if (tbl_found) begin
+              lvl_addr_q <= LEVEL_AW'(radd_off);
+              state      <= S_RADD_LVL;
+            end else begin
+              // The old order is already removed. On failed re-insert, leave
+              // no orphan depth; tbl_ins_fails signals that resync is needed.
+              state <= S_FINISH;
+            end
           end
         end
         S_RADD_LVL: begin

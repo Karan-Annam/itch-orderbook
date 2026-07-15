@@ -17,6 +17,7 @@ module order_ref_table
 
   input  logic                 cmd_valid,
   input  logic [1:0]           cmd_op,      // OP_INSERT/LOOKUP/DELETE
+  input  logic                 cmd_unique,  // INSERT must not overwrite a live key
   input  logic [REF_W-1:0]     cmd_ref,
   input  logic [PRICE_W-1:0]   cmd_price,
   input  logic [SHARES_W-1:0]  cmd_shares,
@@ -56,6 +57,7 @@ module order_ref_table
   typedef enum logic [2:0] {S_IDLE, S_HASH, S_HOME, S_PROBE, S_DONE} state_t;
   state_t                 state;
   logic [1:0]             op_q;
+  logic                   unique_q;
   logic [REF_W-1:0]       ref_q;
   logic [PRICE_W-1:0]     price_q;
   logic [SHARES_W-1:0]    shares_q;
@@ -106,6 +108,7 @@ module order_ref_table
       case (state)
         S_IDLE: if (cmd_valid) begin
           op_q        <= cmd_op;
+          unique_q    <= cmd_unique;
           ref_q       <= cmd_ref;
           price_q     <= cmd_price;
           shares_q    <= cmd_shares;
@@ -129,9 +132,14 @@ module order_ref_table
         S_PROBE: begin
           if (op_q == OP_INSERT) begin
             if (cur.valid && cur.oref == ref_q) begin
-              // key already present: update in place
-              mem[idx_q] <= ins_entry;
-              res_found  <= 1'b1;
+              // Adds/replace-adds require a new ref. Modify traffic uses
+              // INSERT as an in-place remaining-share update.
+              if (unique_q) begin
+                res_found <= 1'b0;
+              end else begin
+                mem[idx_q] <= ins_entry;
+                res_found  <= 1'b1;
+              end
               state      <= S_DONE;
             end else if (!cur.valid && !cur.tomb) begin
               // true empty: insert here, or at the first tombstone we passed
